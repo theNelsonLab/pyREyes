@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pyREyes"
+version = "3.3.0"
+authors = [
+    { name = "Dmitry Eremin", email = "eremin@caltech.edu" },
+    { name = "Hongyu Zhang", email = "hzhang7@caltech.edu" }
+]
+description = "Automated MicroED diffraction data collection and analysis package"
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "pyautoprocess>=0.1.1",
+    "numpy==2.2.6",
+    "numba==0.61.2",
+    "pandas==2.2.3",
+    "matplotlib==3.10.3",
+    "hyperspy==2.3.0",
+    "scipy==1.15.3",
+    "scikit-image==0.25.2",
+    "scikit-learn==1.6.1",
+    "shapely==2.1.1",
+    "psutil==7.0.0"
+]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/pyREyes/lib" = "pyREyes/lib"
+"src/pyREyes/config" = "pyREyes/config"  
+
+[project.scripts]
+grid-squares-0 = "pyREyes.grid_squares:main"
+manual-squares-0-1 = "pyREyes.manual_squares:main"
+eucentricity-1 = "pyREyes.eucentricity:main"
+dif-map-2 = "pyREyes.dif_map:main"
+write-targets-3 = "pyREyes.write_sorted_targets_nav:main"
+append-targets-3-1 = "pyREyes.append_targets_nav:main"
+create-final-targets-4 = "pyREyes.create_final_targets_nav:main"
+mnt-maps-targets-5 = "pyREyes.mnt_maps_targets:main"
+reyes-monitor = "pyREyes.REyes:main"
+
+[project.urls]
+Homepage = "https://github.com/theNelsonLab/REyes"
+Issues = "https://github.com/theNelsonLab/REyes/issues"
+Documentation = "https://github.com/theNelsonLab/REyes/tree/main/src/pyREyes/docs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pyREyes"]
