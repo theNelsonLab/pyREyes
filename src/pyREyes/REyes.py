@@ -37,8 +37,8 @@ class CustomHelpFormatter(argparse.HelpFormatter):
             return text.splitlines()
         return super()._split_lines(text, width)
 
-__version__ = '3.3.0'
-__min_required_version__ = '3.3.0'
+__version__ = '3.4.0'
+__min_required_version__ = '3.4.0'
 
 class REyesProcessor:
     def __init__(self,
@@ -65,6 +65,9 @@ class REyesProcessor:
              beam_center_x=None,
              beam_center_y=None,
              file_extension=None,
+             detector_distance=None,
+             exposure=None,
+             rotation=None,
              # Autosolve parameters
              autosolve=False,
              shelx=None,
@@ -126,6 +129,9 @@ class REyesProcessor:
             self.beam_center_x = beam_center_x
             self.beam_center_y = beam_center_y
             self.file_extension = file_extension
+            self.detector_distance = detector_distance
+            self.exposure = exposure
+            self.rotation = rotation
 
         
         self.autosolve = autosolve
@@ -494,6 +500,9 @@ class REyesProcessor:
                 add_arg("beam-center-x", self.beam_center_x)
                 add_arg("beam-center-y", self.beam_center_y)
                 add_arg("file-extension", self.file_extension)
+                add_arg("detector-distance", self.detector_distance)
+                add_arg("exposure", self.exposure)
+                add_arg("rotation", self.rotation)
 
                 
                 self.logger.info(f"Running autoprocess command: {' '.join(cmd)}")
@@ -857,6 +866,18 @@ def main():
                                 type=str,
                                 help='File extension for movies (e.g., ".mrc" or ".ser")')
 
+    autoprocess_group.add_argument('--detector-distance',
+                                type=float,
+                                help='Detector distance in mm')
+
+    autoprocess_group.add_argument('--exposure',
+                                type=float,
+                                help='Exposure time')
+
+    autoprocess_group.add_argument('--rotation',
+                                type=float,
+                                help='Rotation value')
+
     autosolve_group.add_argument('--autosolve', 
                                 action='store_true', 
                                 help='Run AutoSolve after AutoProcess')
@@ -914,6 +935,9 @@ def main():
             'beam_center_x': args.beam_center_x,
             'beam_center_y': args.beam_center_y,
             'file_extension': args.file_extension,
+            'detector_distance': args.detector_distance,
+            'exposure': args.exposure,
+            'rotation': args.rotation,
         })
 
     # Only include AutoSolve args if the flag is set

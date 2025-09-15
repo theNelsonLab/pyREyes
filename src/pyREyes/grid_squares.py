@@ -16,8 +16,8 @@ from shapely.ops import unary_union
 from typing import Any, Dict, List, Optional, Tuple
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
-__version__ = '3.3.0'
-__min_required_version__ = '3.3.0'
+__version__ = '3.4.0'
+__min_required_version__ = '3.4.0'
 
 from pyREyes.lib.ui.REyes_ui import print_banner
 from pyREyes.lib.REyes_microscope_configurations import MicroscopeConfig, load_microscope_configs
@@ -266,7 +266,7 @@ class GridSquareProcessor:
             )
 
             clearly_labeled_image, new_numer_features = ImageProcessor.remove_edge_touching_regions(labeled_image, extent, region_sizes, strip)
-            centroids = ImageProcessor.merge_small_regions_centroids(clearly_labeled_image, extent, std_merge_threshold = 1.5, space_width = space_width, binary_image = binary_image, debug = self.debug)
+            centroids = ImageProcessor.merge_small_regions_centroids(clearly_labeled_image, extent, std_merge_threshold = 1.5, space_width = space_width, binary_image = binary_image, debug = self.debug, plotting_manager=self.plotting_manager)
             centroid_list = [(round(x, 3), round(y, 3)) for x, y in centroids.values()]
 
             if not centroid_list:

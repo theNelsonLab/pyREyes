@@ -22,8 +22,8 @@ from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs
 # Configuration Constants
 MICROSCOPE_CONFIGS = load_microscope_configs()
 
-__version__ = '3.3.0'
-__min_required_version__ = '3.3.0'
+__version__ = '3.4.0'
+__min_required_version__ = '3.4.0'
 
 class NavFileError(Exception):
     """Custom exception for NAV file processing errors."""
@@ -227,6 +227,12 @@ def block_based_target_selection(
 
         entries = processor_instance.generate_nav_entries(combined, start_item_number=None)
         all_entries.extend(entries)
+        
+        # Add to master list for CSV export
+        if 'all_selected_df' not in locals():
+            all_selected_df = combined.copy()
+        else:
+            all_selected_df = pd.concat([all_selected_df, combined], ignore_index=True)
 
     log_print(f"\nFinal summary:")
     log_print(f"Total selected entries: {total_selected}")
@@ -238,13 +244,23 @@ def block_based_target_selection(
         f.write(nav_content)
 
     log_print(f"Successfully created block-based .nav file: {output_file} with {len(all_entries)} entries")
+    
+    # Create corresponding CSV file
+    csv_output_file = str(Path(output_file).parent / "targets.csv")
+    if 'all_selected_df' in locals():
+        # Ensure target_number column exists (use CustomItemNumber as target_number)
+        if 'CustomItemNumber' in all_selected_df.columns:
+            all_selected_df['target_number'] = all_selected_df['CustomItemNumber']
+        all_selected_df.to_csv(csv_output_file, index=False)
+        log_print(f"Successfully created corresponding CSV file: {csv_output_file} with {len(all_selected_df)} entries")
 
 
 def create_targets_nav(
     output_file: str, 
     top_target_per_category: int, 
     tolerance: float, 
-    input_files: Optional[List[str]] = None
+    input_files: Optional[List[str]] = None,
+    processor_instance=None
 ) -> None:
     """
     Creates a new targets.nav file from multiple input files.
@@ -285,9 +301,78 @@ def create_targets_nav(
             f.write('AdocVersion = 2.00\n\n')
             f.write('\n\n'.join(all_selected_items) + '\n')
         log_print(f"Successfully created {output_file} with {len(all_selected_items)} items")
+        
+        # Create corresponding CSV file if we have selected items and processor
+        if all_selected_items and processor_instance:
+            csv_output_file = str(Path(output_file).parent / "targets.csv")
+            create_targets_csv_from_nav_entries(all_selected_items, csv_output_file, processor_instance)
+            
     except Exception as e:
         log_print(f"Error writing output file: {str(e)}", logging.ERROR)
         raise
+
+def create_targets_csv_from_nav_entries(nav_entries: List[str], csv_output_file: str, processor_instance) -> None:
+    """
+    Create targets.csv from selected navigation entries by matching coordinates.
+    
+    Args:
+        nav_entries: List of selected navigation entry strings
+        csv_output_file: Path for the output CSV file
+        processor_instance: DiffractionDataProcessor instance
+    """
+    try:
+        # Load the original dif_map CSV data
+        dif_map_csv = "dif_maps/dif_map_sums.csv"
+        if not os.path.exists(dif_map_csv):
+            log_print(f"Original CSV not found: {dif_map_csv}", logging.ERROR)
+            return
+            
+        original_df = pd.read_csv(dif_map_csv)
+        
+        # Extract target information from nav entries
+        selected_rows = []
+        target_number = 1
+        
+        for nav_entry in nav_entries:
+            # Extract coordinates from nav entry
+            pts_x_match = re.search(r'PtsX = (-?[\d.]+)', nav_entry)
+            pts_y_match = re.search(r'PtsY = (-?[\d.]+)', nav_entry)
+            item_match = re.search(r'\[Item = (\d+)', nav_entry)
+            
+            if pts_x_match and pts_y_match:
+                nav_x = float(pts_x_match.group(1))
+                nav_y = float(pts_y_match.group(1))
+                nav_item = int(item_match.group(1)) if item_match else target_number
+                
+                # Find matching row in original data by coordinates
+                for idx, row in original_df.iterrows():
+                    if pd.isna(row['Coordinates']) or row['Coordinates'] == '[None, None, None]':
+                        continue
+                        
+                    try:
+                        coords = eval(row['Coordinates'])
+                        if len(coords) >= 2 and coords[0] is not None and coords[1] is not None:
+                            # Compare coordinates (allow small tolerance for floating point differences)
+                            if abs(coords[0] - nav_x) < 0.1 and abs(coords[1] - nav_y) < 0.1:
+                                # Found matching row
+                                match_row = row.copy()
+                                match_row['target_number'] = nav_item
+                                selected_rows.append(match_row)
+                                break
+                    except:
+                        continue
+                        
+            target_number += 1
+        
+        if selected_rows:
+            targets_df = pd.DataFrame(selected_rows)
+            targets_df.to_csv(csv_output_file, index=False)
+            log_print(f"Successfully created corresponding CSV file: {csv_output_file} with {len(targets_df)} entries")
+        else:
+            log_print("No matching coordinates found between nav entries and original CSV data", logging.WARNING)
+            
+    except Exception as e:
+        log_print(f"Error creating targets CSV: {str(e)}", logging.ERROR)
 
 def create_parser() -> argparse.ArgumentParser:
     """Parse command line arguments."""
@@ -370,11 +455,13 @@ def main() -> Optional[int]:
             )
         else:
             log_print(f"Running category-based target selection (top {args.top_target_per_category} per category)")
+            processor = DiffractionDataProcessor(args.microscope) 
             create_targets_nav(
                 output_file=str(Path('targets') / args.output),
                 top_target_per_category=args.top_target_per_category,
                 tolerance=args.tolerance,
-                input_files=args.input_files
+                input_files=args.input_files,
+                processor_instance=processor
             )
 
         

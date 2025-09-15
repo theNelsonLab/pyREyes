@@ -1,5 +1,6 @@
 # Diffraction Map Processing Pipeline (REyes v3.3)
 [![License](https://img.shields.io/badge/License-Academic_Use_Only-blue.svg)](LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.16971798.svg)](https://doi.org/10.5281/zenodo.16971798)
 
 ## Quick Start
 ```bash
@@ -19,11 +20,19 @@ pyREyes is a Python package to support REyes (Reciprocal Eyes), an end-to-end au
 - Grid squares detection and atlas management
 - Manual or automated grid square selection
 - Eucentricity correction
-- Diffraction pattern quality classification
+- Diffraction pattern quality classification using DQI (Diffraction Quality Index)
 - Navigation file generation with spatial awareness
 - Comprehensive visualization suite
 - Automated data processing with state machine monitoring
 - Optional movie processing and structure solution integration
+
+## Diffraction Quality Analysis
+
+REyes uses advanced quality metrics to assess diffraction patterns:
+
+**LQP (Lattice Quality Peaks)**: A number of peaks in an FFT of the thresholded and binarized diffraction snapshot that correspond to lattice quality.
+
+**DQI (Diffraction Quality Index)**: A quality metric calculated as the ratio of LQP to total diffraction peaks (DQI = LQP / Diffraction Peaks). DQI values above 3.0 indicate higher crystalline quality with better-ordered lattice structures. This index is used to automatically classify and prioritize crystal targets for data collection.
 
 ## Pipeline Components
 
@@ -59,7 +68,9 @@ Eremin, D.B.; Jha, K.K.; Delgadillo, D.A.; Zhang, H.; Foxman, S.H.; Johnson, S.N
 ## Data Availability
 Electron diffraction data are publicly available through the Caltech.
 
-**Repository:** https://miledd.caltech.edu/shared/  
+**Repository:** https://miledd.caltech.edu/shared/
+
+**ZENODO Dataset:** Complete Raw and Processed REyes Dataset: Autonomous MicroED Collection for (S,S)-Salen Ligand - https://doi.org/10.5281/zenodo.16971798  
 
 ## Support
 For support and questions, please contact:

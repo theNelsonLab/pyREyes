@@ -1,0 +1,1104 @@
+MaxMacros	60
+Macro	0
+MacroName REyes_FSD
+
+################BEFORE STARTING###############
+#  USE FOR: CETA-D CAMERAS
+#  TURN OFF LOW DOSE ON SCOPE
+#  TURN ON LOW DOSE IN SERIALEM
+#  LOAD VIEW PARAMETERS
+#  CHECK SPOT SIZE
+#  LOAD RECORD PARAMETERS
+#  CHECK PARALLEL BEAM CONDITION
+###################SETTINGS###################
+
+
+##############LOCATIONS AND NAMES#############
+
+ClearPersistentVars
+
+#LOG DATE
+ReportDateTime
+yyyymmdd := $reportedValue1
+Echo Date: $yyyymmdd
+
+#SET DIRECTORY
+UserSetDirectory [Choose the directory where all the files will be saved]
+set_directory := $reportedValue1
+Echo Chosen directory is $set_directory
+
+#SET SAMPLE NAME
+EnterString sample_name What is your sample name?
+samplename := $sample_name
+Echo Sample name: $samplename
+
+#MONTAGE DIMENSIONS WITH VALIDATION
+EnterOneNumber Enter desired montage dimension (between 2 and 8):
+If $reportedValue1 < 2 or $reportedValue1 > 8
+   Exit Montage size must be between 2 and 8
+Endif
+mnt_size := $reportedValue1
+Echo Montage size: $mnt_size
+
+#STEPSCAN DIMENSIONS WITH VALIDATION
+EnterOneNumber Enter desired map dimension (odd values recommended):
+If $reportedValue1 < 3 or $reportedValue1 > 21
+   Exit Map size must be odd number between 3 and 21
+Endif
+map_size := $reportedValue1
+Echo StepScan map size: $map_size
+
+#TILT RANGE FOR MOVIE WITH VALIDATION
+EnterOneNumber Enter max positive tilt:
+If $reportedValue1 < 5 or $reportedValue1 > 70
+   Exit Tilt angle must be between 5 and 70 degrees
+Endif
+selected_tilt := $reportedValue1
+Echo Selected tilt range: $selected_tilt
+
+
+
+#################STATE MACHINE################
+# Start logging
+SaveLogOpenNew $samplename_prescreening
+
+# Step 1: Montage
+Echo Starting grid montage acquisition...
+Call REyes_MNT
+Echo Grid montage completed successfully
+
+# Step 2: Grid Square Finding
+Echo Finding grid squares in the montage...
+Call ECNT_nav_ready
+Echo Grid squares found successfully
+
+# Step 3: Eucentricity
+Echo Determining eucentricity for the grid...
+Call REyes_ECNT
+Echo Eucentricity points determined successfully
+
+# Step 4: Eucentricity Analysis
+Echo Processing eucentricity data...
+Call ECNT_corrected
+Call REyes_postECNT
+Echo Eucentric plane found successfully
+
+# Step 5: StepScan
+Echo Performing StepScan...
+Call REyes_STPSCN
+Echo All grid squares mapped
+
+# Step 6: Generate Targets
+Echo Processing Diffraction Map...
+Call Targets_nav_ready
+Echo All targets identified successfully
+
+# Step 7: Diffraction Movie
+Echo Collecting continuous rotation data...
+Call REyes_DFMV
+Echo All movies collected
+
+# Final success message
+Echo Sample screening completed!
+
+SaveLog
+EndMacro
+MaxMacros	60
+Macro	2
+MacroName REyes_Screen
+
+################BEFORE STARTING###############
+#
+#  TURN OFF LOW DOSE ON SCOPE
+#  TURN ON LOW DOSE IN SERIALEM
+#  LOAD VIEW PARAMETERS
+#  CHECK SPOT SIZE
+#  LOAD RECORD PARAMETERS
+#  CHECK PARALLEL BEAM CONDITION
+###################SETTINGS###################
+
+
+##############LOCATIONS AND NAMES#############
+
+ClearPersistentVars
+
+#LOG DATE
+ReportDateTime
+yyyymmdd := $reportedValue1
+Echo Date: $yyyymmdd
+
+#SET DIRECTORY
+UserSetDirectory [Choose the directory where all the files will be saved]
+set_directory := $reportedValue1
+Echo Chosen directory is $set_directory
+
+#SET SAMPLE NAME
+EnterString sample_name What is your sample name?
+samplename := $sample_name
+Echo Sample name: $samplename
+
+#MONTAGE DIMENSIONS WITH VALIDATION
+EnterOneNumber Enter desired montage dimension (between 2 and 8):
+If $reportedValue1 < 2 or $reportedValue1 > 8
+   Exit Montage size must be between 2 and 8
+Endif
+mnt_size := $reportedValue1
+Echo Montage size: $mnt_size
+
+#STEPSCAN DIMENSIONS WITH VALIDATION
+EnterOneNumber Enter desired map dimension (odd values recommended):
+If $reportedValue1 < 3 or $reportedValue1 > 21
+   Exit Map size must be odd number between 3 and 21
+Endif
+map_size := $reportedValue1
+Echo StepScan map size: $map_size
+
+
+
+
+
+
+
+
+
+
+
+#################STATE MACHINE################
+# Start logging
+SaveLogOpenNew $samplename_prescreening
+
+# Step 1: Montage
+Echo Starting grid montage acquisition...
+Call REyes_MNT
+Echo Grid montage completed successfully
+
+# Step 2: Grid Square Finding
+Echo Finding grid squares in the montage...
+Call ECNT_nav_ready
+Echo Grid squares found successfully
+
+# Step 3: Eucentricity
+Echo Determining eucentricity for the grid...
+Call REyes_ECNT
+Echo Eucentricity points determined successfully
+
+# Step 4: Eucentricity Analysis
+Echo Processing eucentricity data...
+Call ECNT_corrected
+Call REyes_postECNT
+Echo Eucentric plane found successfully
+
+# Step 5: StepScan
+Echo Performing StepScan...
+Call REyes_STPSCN
+Echo All grid squares mapped
+
+# Final success message
+Echo Sample screening completed!
+
+SaveLog
+EndMacro
+Macro	4
+MacroName REyes_Manual-1
+
+################BEFORE STARTING###############
+#
+#  TURN OFF LOW DOSE ON SCOPE
+#  TURN ON LOW DOSE IN SERIALEM
+#  LOAD VIEW PARAMETERS
+#  CHECK SPOT SIZE
+#  LOAD RECORD PARAMETERS
+#  CHECK PARALLEL BEAM CONDITION
+###################SETTINGS###################
+
+
+##############LOCATIONS AND NAMES#############
+
+ClearPersistentVars
+
+#LOG DATE
+ReportDateTime
+yyyymmdd := $reportedValue1
+Echo Date: $yyyymmdd
+
+#SET DIRECTORY
+UserSetDirectory [Choose the directory where all the files will be saved]
+set_directory := $reportedValue1
+Echo Chosen directory is $set_directory
+
+#SET SAMPLE NAME
+EnterString sample_name What is your sample name?
+samplename := $sample_name
+Echo Sample name: $samplename
+
+#MONTAGE DIMENSIONS WITH VALIDATION
+EnterOneNumber Enter desired montage dimension (between 2 and 8):
+If $reportedValue1 < 2 or $reportedValue1 > 8
+   Exit Montage size must be between 2 and 8
+Endif
+mnt_size := $reportedValue1
+Echo Montage size: $mnt_size
+
+#STEPSCAN DIMENSIONS WITH VALIDATION
+EnterOneNumber Enter desired map dimension (odd values recommended):
+If $reportedValue1 < 3 or $reportedValue1 > 21
+   Exit Map size must be odd number between 3 and 21
+Endif
+map_size := $reportedValue1
+Echo StepScan map size: $map_size
+
+#TILT RANGE FOR MOVIE WITH VALIDATION
+EnterOneNumber Enter max positive tilt:
+If $reportedValue1 < 5 or $reportedValue1 > 70
+   Exit Tilt angle must be between 5 and 70 degrees
+Endif
+selected_tilt := $reportedValue1
+Echo Selected tilt range: $selected_tilt
+
+
+
+#################STATE MACHINE################
+# Start logging
+SaveLogOpenNew $samplename_prescreening
+
+# Step 1: Montage
+Echo Starting grid montage acquisition...
+Call REyes_MNT
+Echo Grid montage completed successfully
+
+# Final success message
+Echo Select grid squares for StepScan!
+
+SaveLog
+EndMacro
+Macro	6
+MacroName REyes_Manual-2_SD
+
+################BEFORE STARTING###############
+#  DID YOU SELECT DESIRED GRID SQUARES?
+##############################################
+
+# Step 2a: Manual Squares
+Echo Saving Added Grid Squares to the navigator file...    
+Call REyes_saveNAV
+Call Manual_ready
+Echo Navigator has been saved and selected squares are ready
+
+# Step 2b: Manual Squares
+Echo Prepare Navigator...
+Call REyes_premanualECNT
+Echo Navigator is ready for Eucentricity step
+
+# Step 2c: Grid Square Finding
+Echo Finding grid squares in the montage...
+Call ECNT_nav_ready
+Echo Grid squares found successfully
+
+# Step 3: Eucentricity
+Echo Determining eucentricity for the grid...
+Call REyes_ECNT
+Echo Eucentricity points determined successfully
+
+# Step 4: Eucentricity Analysis
+Echo Processing eucentricity data...
+Call ECNT_corrected
+Call REyes_postECNT
+Echo Eucentric plane found successfully
+
+# Step 5: StepScan
+Echo Performing StepScan...
+Call REyes_STPSCN
+Echo All grid squares mapped
+
+# Step 6: Generate Targets
+Echo Processing Diffraction Map...
+Call Targets_nav_ready
+Echo All targets identified successfully
+
+# Step 7: Diffraction Movie
+Echo Collecting continuous rotation data...
+Call REyes_DFMV
+Echo All movies collected
+
+# Final success message
+Echo Sample screening completed!
+
+SaveLog
+EndMacro
+Macro	8
+MacroName REyes_Manual-2_Screen
+
+################BEFORE STARTING###############
+#  DID YOU SELECT DESIRED GRID SQUARES?
+##############################################
+
+# Step 2a: Manual Squares
+Echo Saving Added Grid Squares to the navigator file...    
+Call REyes_saveNAV
+Call Manual_ready
+Echo Navigator has been saved and selected squares are ready
+
+# Step 2b: Manual Squares
+Echo Prepare Navigator...
+Call REyes_premanualECNT
+Echo Navigator is ready for Eucentricity step
+
+# Step 2c: Grid Square Finding
+Echo Finding grid squares in the montage...
+Call ECNT_nav_ready
+Echo Grid squares found successfully
+
+# Step 3: Eucentricity
+Echo Determining eucentricity for the grid...
+Call REyes_ECNT
+Echo Eucentricity points determined successfully
+
+# Step 4: Eucentricity Analysis
+Echo Processing eucentricity data...
+Call ECNT_corrected
+Call REyes_postECNT
+Echo Eucentric plane found successfully
+
+# Step 5: StepScan
+Echo Performing StepScan...
+Call REyes_STPSCN
+Echo All grid squares mapped
+
+# Final success message
+Echo Sample screening completed!
+
+SaveLog
+EndMacro
+Macro	30
+MacroName REyes_MNT
+
+##############LOCATIONS AND NAMES#############
+
+#EXTENSIONS
+mrc_ext =  .mrc
+nav_ext = .nav
+log_ext = .log
+mdoc_ext = .mdoc
+
+#FILE NAMES
+#FOR MNT SCRIPT
+montage = _210LM_$mnt_sizex$mnt_size
+navigator = _nav
+
+log_file_name = $samplename$montage$log_ext
+nav_file_name := $samplename$montage$navigator$nav_ext
+mnt_file_name = $samplename$montage$mrc_ext
+mdoc_file_name = $mnt_file_name$mdoc_ext
+
+
+
+##################INITIATION##################
+
+#START LOGGING
+
+DoesFileExist $log_file_name
+log_file_exists = $reportedValue1
+
+If $log_file_exists == 0
+   SaveLogOpenNew $samplename$montage
+
+ElseIf $log_file_exists == 1
+   Echo Log file with this name already exists and will be saved with an increment index
+   SaveLogOpenNew $samplename$montage
+
+Endif
+
+Echo Chosen directory: $set_directory
+Echo Sample name: $samplename
+Echo Montage size: $mnt_size
+
+#OPEN NAVIGATOR
+
+DoesFileExist $nav_file_name
+nav_file_exists = $reportedValue1
+
+ReportIfNavOpen
+nav_file_open = $reportedValue1
+
+If $nav_file_exists == 0 and $nav_file_open == 0
+   OpenNavigator $samplename$montage$navigator$nav_ext
+
+ElseIf $nav_file_exists == 1 and $nav_file_open == 0
+   ReadNavFile $nav_file_name
+
+ElseIf $nav_file_exists == 0 and $nav_file_open == 1
+   SaveNavigator $samplename$montage$navigator$nav_ext
+
+Endif
+
+# SET FILE TYPE TO MRC
+
+SetNewFileType 0
+
+
+
+########TAKE INITIAL MONTAGE AT 210 LM########
+
+DoesFileExist $mnt_file_name
+If $reportedValue1 == 0
+
+   # ADJUST EUCENTRICITY
+
+   SetColumnOrGunValve 1
+   ScreenUp
+   SetBeamBlank 0
+
+   Eucentricity 1
+   ReportStageXYZ
+   z_value_rough = $reportedValue3
+
+   SetLowDoseMode 1
+   OpenNewMontage $mnt_size $mnt_size $mnt_file_name
+
+   Echo Starting 210x LM montage collection
+   ReportDateTime
+   ReportNumMontagePieces
+
+   # FULL MONTAGE SETTINGS AND ACQUISITION
+
+   SetColumnOrGunValve 1
+   TiltTo 0
+   MoveStageTo 0 0 $z_value_rough
+
+   Delay 1 sec
+
+   SetContinuous M 0
+   SetExposure M 3
+   SetBinning M 2
+
+   M
+   NewMap
+
+   ScreenDown
+
+   SetBeamBlank 1
+   SetColumnOrGunValve 0
+
+   Echo Completed 210x LM montage data collection
+   ReportDateTime
+
+ElseIf $reportedValue1 == 1
+   Echo You have already acquired grid montage
+
+Endif
+
+# CHECK THAT MDOC FILE WAS SAVED
+
+DoesFileExist $mdoc_file_name
+mdoc_file_exists = $reportedValue1
+
+If $mdoc_file_exists == 0
+   Echo .mdoc file for montage was not found. Please check settings.
+ElseIf $mdoc_file_exists == 1
+   Echo .mdoc file for montage has been saved successfully.
+Endif
+
+SaveNavigator
+SaveLog
+EndMacro
+Macro	31
+MacroName REyes_ECNT
+
+##############LOCATIONS AND NAMES#############
+
+#EXTENSIONS
+mrc_ext =  .mrc
+nav_ext = .nav
+log_ext = .log
+mdoc_ext = .mdoc
+
+#FILE NAMES
+#FOR ECNT SCRIPT
+sqrs = _grid_squares
+sqrs_file_name = grid_squares\eucentricity$nav_ext
+
+log_sqrs_file_name = $samplename$sqrs$log_ext
+
+
+##################INITIATION##################
+
+#START LOGGING
+
+DoesFileExist $log_sqrs_file_name
+log_file_exists = $reportedValue1
+
+If $log_file_exists == 0
+   SaveLogOpenNew $samplename$sqrs
+
+ElseIf $log_file_exists == 1
+   Echo Log file with this name already exists and will be saved with an increment index
+   SaveLogOpenNew $samplename$sqrs
+
+Endif
+
+Echo Chosen directory: $set_directory
+Echo Current sample: $samplename
+
+ReportIfNavOpen
+nav_file_open = $reportedValue1
+
+If $nav_file_open == 0
+   Exit Could not locate Navigator.
+
+Endif
+
+#MERGE GRID SQUARES TO NAVIGATOR
+
+DoesFileExist $sqrs_file_name
+sqrs_file_exists = $reportedValue1
+
+If $sqrs_file_exists == 1
+   MergeNavFile $sqrs_file_name
+
+ElseIf $sqrs_file_exists == 0
+   Exit $sqrs_file_name was not found
+
+Endif
+
+ReportNumTableItems
+
+Echo $reportedValue1
+
+nitems = $reportedValue1 - 1
+
+Echo Current number of items: $nitems
+
+posoffset = 0
+posct = $posoffset + 1
+
+Echo Current position: $posct
+
+
+
+#########RUN FINE EUCENTRICITY IN VIEW########
+
+SetColumnOrGunValve 1
+SetBeamBlank 0
+ScreenUp
+
+Loop $nitems
+
+   posct = $posct + 1
+
+   MoveToNavItem $posct
+
+   Echo Moved to Navigator item $posct
+
+   Delay 1 sec
+
+   SetContinuous V 0
+   SetExposure V 1.5
+   SetBinning V 2
+
+
+   Eucentricity 3
+
+   UpdateItemZ $posct
+
+   ReportStageXYZ
+
+EndLoop
+
+Echo STOPPING
+
+ReportClock
+
+Echo Completed fine eucentricity for all grid squares
+
+ReportDateTime
+
+ScreenDown
+SetBeamBlank 1
+SetColumnOrGunValve 0
+
+SaveNavigator
+SaveLog
+EndMacro
+Macro	32
+MacroName REyes_STPSCN
+
+##############LOCATIONS AND NAMES#############
+
+#EXTENSIONS
+mrc_ext =  .mrc
+nav_ext = .nav
+log_ext = .log
+mdoc_ext = .mdoc
+
+#FILE NAMES
+#FOR STPCSN SCRIPT
+stpscn = _stepscan
+
+log_stpscn_file_name = $samplename$stpscn$log_ext
+
+
+##################INITIATION##################
+
+#START LOGGING
+
+DoesFileExist $log_stpscn_file_name
+log_file_exists = $reportedValue1
+
+If $log_file_exists == 0
+   SaveLogOpenNew $samplename$stpscn
+
+ElseIf $log_file_exists == 1
+   Echo Log file with this name already exists and will be saved with an increment index
+   SaveLogOpenNew $samplename$stpscn
+
+Endif
+
+Echo Chosen directory: $set_directory
+Echo Current sample: $samplename
+
+ReportIfNavOpen
+nav_file_open = $reportedValue1
+
+If $nav_file_open == 0
+   Exit Could not locate Navigator.
+
+Endif
+
+ReportNumTableItems
+nitems = $reportedValue1 - 1
+Echo Current number of items: $nitems
+
+#SET POSITIONS OFFSET TO SKIP MONTAGE POSITIONS '1'
+posoffset = 1
+posct = $posoffset
+Echo Current position: $posct
+
+
+
+###############STEPSCAN SETTINGS##############
+
+#GRID SETTINGS
+imgnum = 10000
+
+offset_x = 0
+offset_y = 0
+
+increment_x = 5 # microns
+increment_y = 5 # microns
+
+num_loopsx = $map_size # steps in x
+num_loopsy =  $map_size # steps in y
+
+half_loopsx = nearint ( $num_loopsx / 2)
+half_loopsy = nearint ( $num_loopsy / 2 )
+
+x_travel =  $num_loopsx * ( 0 - $increment_x)
+y_travel = $num_loopsy * ( 0 - $increment_y)
+
+
+############RUN STEPSCAN IN RECORD############
+
+SetColumnOrGunValve 1
+SetBeamBlank 0
+ScreenUp
+
+GoToLowDoseArea R
+
+SetContinuous R 0
+SetExposure R 1
+SetBinning R 2
+
+
+Loop $nitems
+
+   posname = $posct
+
+   SaveLogOpenNew $samplename_$posname
+   MakeDirectory $samplename_$posname
+
+   posct = $posct + 1
+   MoveToNavItem $posct
+
+   ReportStageXYZ
+
+   Delay 1 sec
+
+   x_temp = $offset_x - ( $half_loopsx * $increment_x )
+   y_temp = $offset_y - ( $half_loopsy * $increment_y )
+
+   MoveStage $x_temp $y_temp
+
+   Loop $num_loopsy
+
+      Delay 1 sec
+
+      Loop $num_loopsx
+
+         imgnum = $imgnum + 1
+         MoveStage $increment_x 0
+
+         Delay 1 sec
+
+         OpenNewFile $samplename_$posname\$yyyymmdd_$imgnum_integrated_movie$mrc_ext
+         ReportCurrentFilename
+         Record
+         Save
+         CloseFile
+
+         ReportStageXYZ
+
+      EndLoop
+
+      MoveStage (-1 * $num_loopsx * $increment_x ) $increment_y
+      ReportClock
+
+   EndLoop
+
+
+
+   Echo Completed StepScan for current grid square
+   SaveLog
+
+EndLoop
+
+Echo STOPPING
+
+ReportClock
+
+Echo Completed StepScan for all grid squares
+
+ReportDateTime
+
+ScreenDown
+SetBeamBlank 1
+SetColumnOrGunValve 0
+
+SaveNavigator
+SaveLog
+EndMacro
+Macro	33
+MacroName REyes_DFMV
+
+##############LOCATIONS AND NAMES#############
+
+#EXTENSIONS
+mrc_ext =  .mrc
+nav_ext = .nav
+log_ext = .log
+mdoc_ext = .mdoc
+
+#FILE NAMES
+#ADDITIONS FOR DFMV SCRIPT
+
+trgts = _targets
+targets_file_name = targets\targets$nav_ext
+log_dfmv_file_name = $samplename$trgts$log_ext
+
+
+##################INITIATION##################
+
+#START LOGGING
+
+DoesFileExist $log_dfmv_file_name
+log_file_exists = $reportedValue1
+
+If $log_file_exists == 0
+   SaveLogOpenNew $samplename$trgts
+
+ElseIf $log_file_exists == 1
+   Echo Log file with this name already exists and will be saved with an increment index
+   SaveLogOpenNew $samplename$trgts
+
+Endif
+
+Echo Chosen directory: $set_directory
+Echo Current sample: $samplename
+
+ReportIfNavOpen
+nav_file_open = $reportedValue1
+
+If $nav_file_open == 0
+   Exit Could not locate Navigator.
+
+Endif
+
+#CHECK NUMBER OF GRID SQUARES IN NAVIGATOR
+
+ReportNumTableItems
+
+nsqrs = $reportedValue1
+
+Echo Current number of items: $nsqrs
+
+DoesFileExist $targets_file_name
+targets_file_exists = $reportedValue1
+
+If $targets_file_exists == 1
+   MergeNavFile $targets_file_name
+
+ElseIf $targets_file_exists == 0
+   Exit $targets_file_name was not found
+
+Endif
+
+ReportNumTableItems
+
+all_items = $reportedValue1
+
+Echo Total number of items with targets: $all_items
+
+nitems = $all_items - $nsqrs
+
+Echo Current number of crystal targets: $nitems
+
+offset = $nsqrs
+
+Echo Offset: $offset
+
+xtalct = $offset
+
+
+##############DIFF MOVIE SETTINGS#############
+
+#ROTATION SETTINGS
+startangle = $selected_tilt
+finalangle = -$selected_tilt
+range = P$startangletoN$finalangle
+tiltrange = $selected_tilt * 2
+nsweeps = 1
+ReportSpotSize
+spsz = $reportedValue1
+rotrate = 0.3
+rotincr = 0.004 #0.033 * $rotrate #0.066=2dps #0.033=1dps #0.010=0.3dps(CETA) 0.004 for now
+acqrate = 3
+ReportCameraLength
+dist = $reportedValue1 * 1000
+temp = c #c for cryo or rt for room temp
+recordtime = $tiltrange / $rotrate
+
+
+If $dist == 960
+   cetadist = 960
+Endif
+
+Echo CETA camera length is $cetadist
+
+
+
+############RUN STEPSCAN IN RECORD############
+
+SetColumnOrGunValve 1
+SetBeamBlank 0
+ScreenUp
+
+SetContinuous R 1
+SetExposure R 3
+SetBinning R 2
+
+
+ReportExposure R
+expsr = $reportedValue1
+
+movtime = ($startangle - $finalangle) / $rotrate
+nframes = ($startangle - $finalangle) / ($rotrate * $expsr)
+
+MakeDirectory movies
+movnum = 20000
+Delay 2 sec
+
+Loop $nitems
+   movnum = $movnum + 1
+   xtalct = $xtalct + 1
+   sweepcnt = 1
+   movdir = $samplename_mov$xtalct_$cetadistmm_$rotratedps_$acqratespf_sp$spsz_$range_sweep$sweepcnt_$temp
+   MakeDirectory movies\$movdir
+   movname = $samplename-mov$xtalct_$cetadist_$rotrate_$expsr_$range_g8sp$spsz_$temp$mrc_ext
+   MoveToNavItem $xtalct
+
+   Loop $nsweeps
+      sweepcnt = $sweepcnt + 1
+      pretilt = $startangle + 3
+      TiltTo $pretilt
+      TiltTo $startangle
+      Delay 1 sec
+      ReportTiltAngle
+      GoToLowDoseArea R
+      UseContinuousFrames 1
+      OpenNewFile movies\$movdir\$yyyymmdd_$movnum_integrated_movie$mrc_ext
+      ReportCurrentFilename
+
+      Record
+
+      StartFrameWaitTimer -1
+      WaitForNextFrame
+      Save
+      echo STARTING TILT
+      BackgroundTilt $finalangle $rotincr
+
+      Loop $nframes
+         StartFrameWaitTimer -1
+         WaitForNextFrame
+         Save 
+      EndLoop
+
+      StopContinuous
+      CloseFile
+      echo END TILT
+      echo Movie folder: $movdir
+      echo Acquired movie: $movname
+      Delay 120 sec
+      TiltTo 0
+      ReportClock
+      ReportStageXYZ
+      Delay 2 sec
+      Echo Completed movie acquisition
+      SaveLog
+   EndLoop
+   
+   SaveLog
+EndLoop
+
+Echo STOPPING
+
+# LET AUTOPROCESS FINISH DATA REDUCTION
+Delay 600 sec
+ReportClock
+
+Echo Completed acquiring tilt movies for all crystals!
+
+ReportDateTime
+
+ScreenDown
+SetBeamBlank 1
+SetColumnOrGunValve 0
+
+SaveNavigator
+SaveLog
+EndMacro
+Macro	40
+MacroName REyes_postECNT
+
+###################SETTINGS###################
+
+#UPDATE NAVIGATOR ITEMS WITH ALL GRID SQUARES
+ReportNumTableItems
+Echo Number of Navigator lines: $reportedValue1
+
+nitems = $reportedValue1 - 1
+Echo Current number of items: $nitems
+
+Loop $nitems
+
+   DeleteNavigatorItem -1
+
+EndLoop
+
+all_squares = $set_directory\grid_squares\grid_squares.nav
+Echo Eucentricity corrected file: $all_squares
+MergeNavFile $all_squares
+
+SaveLog
+EndMacro
+Macro	41
+MacroName REyes_premanualECNT
+
+###################SETTINGS###################
+
+#REMOVE MANUALLY ADDED SQUARES GRID SQUARES
+ReportNumTableItems
+Echo Number of Navigator lines: $reportedValue1
+
+nitems = $reportedValue1 - 1
+Echo Current number of items: $nitems
+
+Loop $nitems
+
+   DeleteNavigatorItem -1
+
+EndLoop
+
+SaveLog
+EndMacro
+Macro	42
+MacroName REyes_saveNAV
+
+Echo $nav_file_name
+SaveNavigator $nav_file_name
+SaveLog
+EndMacro
+Macro	43
+MacroName ECNT_nav_ready
+Loop 20
+   DoesFileExist grid_squares\eucentricity.nav
+   nav_file_exists = $reportedValue1
+
+   If $nav_file_exists == 0
+      Delay 30 sec
+   ElseIf $nav_file_exists == 1
+      Delay 5 sec
+      Break
+   EndIf
+
+EndLoop
+
+If $nav_file_exists == 0
+   Exit REyes got stuck and Navigator file was not generated. Please, check REyes log.
+EndIf
+EndMacro
+Macro	44
+MacroName ECNT_corrected
+Loop 5
+   DoesFileExist grid_squares\eucentricity_correction.png
+   correction_file_exists = $reportedValue1
+
+   If $correction_file_exists == 0
+      Delay 30 sec
+   ElseIf $correction_file_exists == 1
+      Delay 15 sec
+      Break
+   EndIf
+
+EndLoop
+
+If $correction_file_exists == 0
+   Exit REyes got stuck and eucentricity was not corrected. Please, check REyes log.
+EndIf
+EndMacro
+Macro	45
+MacroName Targets_nav_ready
+Loop 50
+   DoesFileExist targets\targets.nav
+   nav_file_exists = $reportedValue1
+
+   If $nav_file_exists == 0
+      Delay 30 sec
+   ElseIf $nav_file_exists == 1
+      Delay 5 sec
+      Break
+   EndIf
+
+EndLoop
+
+If $nav_file_exists == 0
+   Exit REyes got stuck and targets.nav file was not generated. Please, check REyes log.
+EndIf
+EndMacro
+Macro	46
+MacroName Manual_ready
+Loop 20
+   DoesFileExist grid_squares\manual_grid_overlay.png
+   manual_file_exists = $reportedValue1
+
+   If $manual_file_exists == 0
+      Delay 30 sec
+   ElseIf $manual_file_exists == 1
+      Delay 5 sec
+      Break
+   EndIf
+
+EndLoop
+
+If $manual_file_exists == 0
+   Exit REyes got stuck and list of squares has not been updated. Please, check REyes log.
+EndIf
+EndMacro

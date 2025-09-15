@@ -17,7 +17,6 @@ class ImageProcessor:
     """Handles image processing operations for grid square detection."""
     def __init__(self, debug: bool = False):
         self.debug = False
-        self.plotting_manager = PlottingManager(debug=debug)
 
     @staticmethod
     def calculate_normalized_areas(image: np.ndarray, dark_threshold=0.3):
@@ -343,7 +342,15 @@ class ImageProcessor:
             raise GridSquareError(f"Error masking image with polygon: {str(e)}") from e
 
 
-    def merge_small_regions_centroids(image, extent, space_width = None, area_threshold_ratio=0.1, std_merge_threshold = 2.5, distinct_label_offset: int = 1000, binary_image=None, debug = False):
+    def merge_small_regions_centroids(image, 
+                extent, 
+                space_width = None, 
+                area_threshold_ratio=0.1, 
+                std_merge_threshold = 2.5, 
+                distinct_label_offset: int = 1000, 
+                binary_image=None, 
+                debug = False,
+                plotting_manager=None):
         # Works when the img is already labeled 
         X_grid, Y_grid = ImageProcessor.get_physical_coordinates(image, extent)
         X = X_grid.ravel()
@@ -368,7 +375,7 @@ class ImageProcessor:
 
 
             centroid_list = list(centroids.values())
-            self.plotting_manager.plot_montage_from_image(binary_image, extent, centroid_list, save_path="centroids_pre_size_merge.png")
+            plotting_manager.plot_montage_from_image(binary_image, extent, centroid_list, save_path="centroids_pre_size_merge.png")
             
 
         while True:
@@ -422,7 +429,7 @@ class ImageProcessor:
 
         if debug:
             centroid_list = list(centroids.values())
-            self.plotting_manager.plot_montage_from_image(binary_image, extent, centroid_list, save_path="centroids_pre_std_merge.png")
+            plotting_manager.plot_montage_from_image(binary_image, extent, centroid_list, save_path="centroids_pre_std_merge.png")
 
         
         centroid_coords = np.array(list(centroids.values()))
@@ -437,7 +444,7 @@ class ImageProcessor:
         
         iteration = 0
         
-        # Start second loop to merge pairs that are close and are in the same grid square. 
+        # Start second loop to merge pairs that are statistically close. 
         while True:
             centroids = {}
             label_list = np.unique(labels)
@@ -461,7 +468,7 @@ class ImageProcessor:
 
             for i, d in enumerate(nearest_distances):
                 # First condition is detecting close pairs, and the second makes sure that they are not coming from two different grid squares.
-                if (d < (mean_dist - std_merge_threshold * std_dev)) & (d < (space_width  * np.sqrt(2)/ 2)):
+                if (d < (mean_dist - std_merge_threshold * std_dev)):
                     j = np.argmin(dist_matrix[i])
                     label_i = label_keys[i]
                     label_j = label_keys[j]
@@ -507,7 +514,7 @@ class ImageProcessor:
             
             if debug: 
                 centroid_list = list(centroids.values())
-                self.plotting_manager.plot_montage_from_image(binary_image, extent, centroid_list, save_path=f"{area_threshold_ratio}_{std_merge_threshold}_{iteration}.png")
+                plotting_manager.plot_montage_from_image(binary_image, extent, centroid_list, save_path=f"{area_threshold_ratio}_{std_merge_threshold}_{iteration}.png")
                 iteration += 1
 
 

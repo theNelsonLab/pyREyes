@@ -21,8 +21,8 @@ from pyREyes.lib.REyes_logging import setup_logging, log_print
 from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs
 from pyREyes.lib.diffraction.DiffractionDataProcessor import DiffractionDataProcessor, DiffractionProcessingError
 
-__version__ = '3.3.0'
-__min_required_version__ = '3.3.0'
+__version__ = '3.4.0'
+__min_required_version__ = '3.4.0'
 
 MICROSCOPE_CONFIGS = load_microscope_configs()
 
@@ -96,6 +96,14 @@ def main() -> int:
 
                 # Process CSV and generate nav file
                 df = processor.process_csv(csv_file)
+                
+                # Add target_number column to DataFrame
+                df['target_number'] = range(start_item_number, start_item_number + len(df))
+                
+                # Save updated CSV with target numbers
+                df.to_csv(csv_file, index=False)
+                log_print(f"Updated {csv_file} with target numbers")
+                
                 nav_entries = processor.generate_nav_entries(df, start_item_number)
                 
                 

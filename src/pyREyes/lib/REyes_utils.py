@@ -2,6 +2,7 @@ from typing import Optional, Tuple
 from pathlib import Path
 import os
 import re
+import logging
 from pyREyes.lib.REyes_logging import log_print
 
 

@@ -24,8 +24,8 @@ from pyREyes.lib.REyes_logging import setup_logging, log_print
 from pyREyes.lib.image_processing.PlottingManager import PlottingManager
 from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs
 
-__version__ = '3.3.0'
-__min_required_version__ = '3.3.0'
+__version__ = '3.4.0'
+__min_required_version__ = '3.4.0'
 
 MICROSCOPE_CONFIGS = load_microscope_configs()
 
@@ -41,7 +41,12 @@ def find_mrc_and_mdoc_files() -> Tuple[Optional[str], Optional[str]]:
     return None, None
 
 class DiffractionQuality(Enum):
-    """Enumeration for diffraction quality labels."""
+    """Enumeration for diffraction quality labels.
+    
+    Note: These quality classifications are based on DQI (Diffraction Quality Index),
+    which is the ratio of LQP (Lattice Quality Peaks) to diffraction peaks.
+    The DQI calculation and classification is performed in dif_map.py.
+    """
     GRID = 0
     NO_DIFFRACTION = 1
     POOR_DIFFRACTION = 2
@@ -577,19 +582,19 @@ def main() -> int:
                 'input_csv': 'dif_map_sums.csv',
                 'output_csv': 'diff_map_peaks_plot.csv',
                 'column': 'FilteredPeaks',
-                'title': ' w/ '.join(components + (['Spots Map'] if not args.no_diff_map else [])),
-                'output_file': 'mnt_dif_spots_map_w_targets.png',
-                'cbar_label': 'Diffraction Spots',
+                'title': ' w/ '.join(components + (['Diffraction Peaks Map'] if not args.no_diff_map else [])),
+                'output_file': 'mnt_dif_peaks_map_w_targets.png',
+                'cbar_label': 'Diffraction Peaks',
                 'use_log': False,
                 'quality_map': False
             },
             {
                 'input_csv': 'dif_map_sums.csv',
-                'output_csv': 'diff_map_ft_peaks_plot.csv',
+                'output_csv': 'diff_map_lqp_plot.csv',
                 'column': 'FTPeaks',
-                'title': ' w/ '.join(components + (['FT Spots Map'] if not args.no_diff_map else [])),
-                'output_file': 'mnt_ft_spots_map_w_targets.png',
-                'cbar_label': 'FT Spots',
+                'title': ' w/ '.join(components + (['LQP Map'] if not args.no_diff_map else [])),
+                'output_file': 'mnt_lqp_map_w_targets.png',
+                'cbar_label': 'LQP',
                 'use_log': False,
                 'quality_map': False
             },

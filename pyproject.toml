@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyREyes"
-version = "3.3.0"
+version = "3.4.0"
 authors = [
     { name = "Dmitry Eremin", email = "eremin@caltech.edu" },
     { name = "Hongyu Zhang", email = "hzhang7@caltech.edu" }
@@ -14,7 +14,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
     "Operating System :: OS Independent",
 ]
 dependencies = [

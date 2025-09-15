@@ -1,7 +1,8 @@
 """
 REyes DMP (Diffraction Map Processor)
 A tool to process blocks of diffraction images and classify their quality
-based on diffraction spots and Fourier Transform peaks.
+based on diffraction peaks and LQP (Lattice Quality Peaks) using 
+DQI (Diffraction Quality Index) analysis.
 """
 
 import argparse
@@ -30,8 +31,8 @@ from pyREyes.lib.ui.REyes_ui import print_banner
 from pyREyes.lib.REyes_logging import setup_logging, log_print
 from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs, MicroscopeConfig
 
-__version__ = '3.3.0'
-__min_required_version__ = '3.3.0'
+__version__ = '3.4.0'
+__min_required_version__ = '3.4.0'
 
 # Configuration Constants
 MICROSCOPE_CONFIGS = load_microscope_configs()
@@ -47,6 +48,7 @@ class ImageProcessor:
             config: MicroscopeConfig object containing processing parameters
         """
         self.config = config
+        self._conversion_logged = False  # Track if uint16 conversion message was already logged
         
     def parse_mrc(self, mrc_file: str) -> np.ndarray:
         """
@@ -62,10 +64,20 @@ class ImageProcessor:
             - Target size is 2048x2048
             - Smaller images are processed with warning
             - Larger images are downsampled using mean binning
+            - Converts uint16/uint8 data to float64 to prevent overflow
         """
         # Load the MRC file
         signal = hs.load(mrc_file)
         data = signal.data
+        
+        # CRITICAL FIX: Convert unsigned integer data to float64 early to prevent overflow
+        # This is especially important for uint16 MRC files which can cause overflow
+        # during arithmetic operations later in the pipeline
+        if data.dtype in [np.uint8, np.uint16, np.uint32]:
+            if not self._conversion_logged:
+                log_print(f"Converting {data.dtype} data to float64 to prevent overflow (this message will only appear once)")
+                self._conversion_logged = True
+            data = data.astype(np.float64)
         
         # Check the shape of the data
         if data.shape == (2048, 2048):
@@ -94,6 +106,11 @@ class ImageProcessor:
                         data: np.ndarray, 
                         ft_done: bool = False) -> np.ndarray:
         """Generates a binary image using Gaussian blurs and thresholding."""
+        # CRITICAL FIX: Convert uint16 to float64 to prevent overflow
+        # This prevents integer overflow when subtracting Gaussian filtered images
+        if data.dtype in [np.uint8, np.uint16, np.uint32]:
+            data = data.astype(np.float64)
+        
         if ft_done:
             # Use original hardcoded values for FT processing
             harsh_blur_data = gaussian_filter(data, sigma=20)
@@ -208,8 +225,8 @@ class DiffractionAnalyzer:
         Notes:
             Processes the file through multiple stages:
             1. Primary binary image creation for diffraction spot detection
-            2. Secondary FT analysis for pattern detection
-            3. Quality classification based on spot counts and patterns
+            2. Secondary FT analysis for LQP (Lattice Quality Peaks) detection
+            3. Quality classification based on DQI (Diffraction Quality Index) calculation
         """
         try:
             # Load and process the MRC file
@@ -239,7 +256,7 @@ class DiffractionAnalyzer:
                 ft_done=True
             )
             
-            # Classify diffraction quality
+            # Classify diffraction quality using DQI (Diffraction Quality Index)
             quality = self._classify_diffraction(n_dif_spots, n_pat_spots)
             
             return DiffractionResult(
@@ -258,27 +275,33 @@ class DiffractionAnalyzer:
         n_pat_spots: int
     ) -> DiffractionQuality:
         """
-        Classify diffraction quality based on spot counts.
+        Classify diffraction quality based on spot counts and DQI (Diffraction Quality Index).
         
         Args:
             n_dif_spots: Number of detected diffraction spots
-            n_pat_spots: Number of detected pattern spots
+            n_pat_spots: Number of detected LQP (Lattice Quality Peaks)
             
         Returns:
             DiffractionQuality enum indicating the classification
+            
+        Notes:
+            DQI (Diffraction Quality Index) = n_pat_spots / n_dif_spots
+            Classification uses DQI threshold comparison via good_rule parameter
         """
         if n_dif_spots < 3:
             return DiffractionQuality.NO_DIFFRACTION
         elif n_dif_spots < 10:
             return DiffractionQuality.POOR_DIFFRACTION
         elif self.config.good_rule * n_dif_spots > n_pat_spots:
+            # DQI (n_pat_spots/n_dif_spots) is below good_rule threshold
             return DiffractionQuality.BAD_DIFFRACTION
         else:
+            # DQI (n_pat_spots/n_dif_spots) meets good_rule threshold
             return DiffractionQuality.GOOD_DIFFRACTION
 
     def update_diffraction_quality(self, df: pd.DataFrame) -> None:
         """
-        Update diffraction quality classifications in a DataFrame.
+        Update diffraction quality classifications in a DataFrame using DQI (Diffraction Quality Index).
         
         Args:
             df: DataFrame containing diffraction analysis data
@@ -286,19 +309,21 @@ class DiffractionAnalyzer:
         Notes:
             - Updates in place, modifying the 'DifQuality' column
             - Also updates 'FilteredPeaks' and 'FTPeaks' values for consistency
-            - Classifications are based on sum threshold and spot counts
+            - Classifications are based on sum threshold and DQI calculations
+            - DQI (Diffraction Quality Index) = LQP / Diffraction Peaks
         """
         mean_sum = df['Sum'].mean()
         threshold = mean_sum / self.config.grid_rule
 
         def classify_row(row: pd.Series) -> Tuple[str, int, int]:
-            """Classify a single row of data."""
+            """Classify a single row of data using DQI (Diffraction Quality Index)."""
             if row['Sum'] < threshold:
                 return DiffractionQuality.GRID.value, 0, 0
             
             n_dif_spots = row['FilteredPeaks']
             n_pat_spots = row['FTPeaks']
             
+            # Apply DQI (Diffraction Quality Index) classification
             quality = self._classify_diffraction(n_dif_spots, n_pat_spots)
             
             if quality == DiffractionQuality.GRID:
@@ -478,12 +503,12 @@ class DataVisualizer:
             cbar: Colorbar object to be labeled
         """
         # Set title based on suffix
-        if title_suffix == '_filtered_peaks':
+        if title_suffix == '_diffraction_peaks':
             plt.title(f'Diffraction Peaks: {folder_name}', fontsize=12)
-            cbar.set_label('Number of Spots', fontsize=12)
-        elif title_suffix == '_ft_peaks':
-            plt.title(f'FT Peaks: {folder_name}', fontsize=12)
-            cbar.set_label('Number of FT Spots', fontsize=12)
+            cbar.set_label('Number of Diffraction Peaks', fontsize=12)
+        elif title_suffix == '_lqp':
+            plt.title(f'LQP: {folder_name}', fontsize=12)
+            cbar.set_label('LQP Number', fontsize=12)
         else:
             plt.title(f'Diffraction Map: {folder_name} {title_suffix}', fontsize=12)
             cbar.set_label(colorbar_label or 'Diff. Int.', fontsize=12)
@@ -540,9 +565,9 @@ class DataVisualizer:
         # Correlation between spots and patterns
         plt.figure(figsize=(8, 8))
         plt.scatter(df['FilteredPeaks'], df['FTPeaks'], alpha=0.5)
-        plt.xlabel('Number of Diffraction Spots')
-        plt.ylabel('Number of FT Pattern Spots')
-        plt.title(f'Spots vs Patterns Correlation: {folder_name}')
+        plt.xlabel('Number of Diffraction Peaks')
+        plt.ylabel('LQP Number')
+        plt.title(f'Diffraction Peaks vs LQP Correlation: {folder_name}')
         save_path = self._get_save_path(folder_name, 'spots_correlation')
         self._save_plot(save_path)
 
@@ -751,7 +776,15 @@ class FileHandler:
                 'timestamp': timestamp
             }
             if metadata:
-                block_info.update(metadata)
+                # Validate metadata to prevent corruption
+                if isinstance(metadata, dict):
+                    for key, value in metadata.items():
+                        if isinstance(value, (str, int, float, bool)) or value is None:
+                            block_info[key] = value
+                        else:
+                            log_print(f"Skipping invalid metadata type for {key}: {type(value)}", logging.WARNING)
+                else:
+                    log_print(f"Skipping non-dict metadata: {type(metadata)}", logging.WARNING)
                 
             processed_blocks[block_name] = block_info
             self._write_processed_blocks(processed_blocks)
@@ -779,11 +812,13 @@ class FileHandler:
                     if len(parts) == 2:
                         block_name = parts[0].strip()
                         try:
-                            metadata = eval(parts[1].strip())
+                            metadata = json.loads(parts[1].strip())
                             if isinstance(metadata, dict):
                                 processed_blocks[block_name] = metadata
-                        except:
-                            processed_blocks[block_name] = {'timestamp': parts[1].strip()}
+                        except (json.JSONDecodeError, ValueError):
+                            # Skip corrupted entries instead of storing them as timestamp
+                            log_print(f"Skipping corrupted log entry for {block_name}: {parts[1][:100]}...", logging.WARNING)
+                            continue
                     else:
                         processed_blocks[line.strip()] = {}
                         
@@ -804,7 +839,8 @@ class FileHandler:
             with self.log_path.open('w') as f:
                 for block_name, metadata in processed_blocks.items():
                     if metadata:
-                        f.write(f"{block_name}: {metadata}\n")
+                        # Use json.dumps instead of str() to ensure proper JSON format
+                        f.write(f"{block_name}: {json.dumps(metadata)}\n")
                     else:
                         f.write(f"{block_name}\n")
 
@@ -1104,13 +1140,24 @@ def main() -> int:
                 log_print(f"Data appended to {dif_map_csv}")
 
                 # Process top targets
-                top_items_sum = df.nlargest(args.targets_per_block, 'Sum').copy()
-                top_items_spots = df.nlargest(args.targets_per_block, 'FilteredPeaks').copy()
-                top_items_quality = df[df['DifQuality'] == 'Good diffraction'].copy()
+                # IMPORTANT: Only 'Good diffraction' and 'Bad diffraction' patterns can be targets
+                # Exclude 'Poor diffraction', 'No diffraction', and 'Grid' from all target lists
+                eligible_df = df[df['DifQuality'].isin(['Good diffraction', 'Bad diffraction'])].copy()
+                
+                if len(eligible_df) == 0:
+                    log_print(f"Warning: No eligible targets found in {folder_name} (no Good/Bad diffraction patterns)")
+                    top_items_sum = pd.DataFrame()
+                    top_items_spots = pd.DataFrame() 
+                    top_items_quality = pd.DataFrame()
+                else:
+                    top_items_sum = eligible_df.nlargest(args.targets_per_block, 'Sum').copy()
+                    top_items_spots = eligible_df.nlargest(args.targets_per_block, 'FilteredPeaks').copy()
+                    top_items_quality = eligible_df[eligible_df['DifQuality'] == 'Good diffraction'].copy()
 
-                # Update filenames
+                # Update filenames (only for non-empty DataFrames)
                 for items in [top_items_sum, top_items_spots, top_items_quality]:
-                    items.loc[:, 'Filename'] = items['Path'].apply(lambda x: Path(x).name)
+                    if len(items) > 0:
+                        items.loc[:, 'Filename'] = items['Path'].apply(lambda x: Path(x).name)
 
                 # Ensure correct number of quality items
                 if len(top_items_quality) > args.targets_per_block:
@@ -1120,19 +1167,22 @@ def main() -> int:
                 targets_folder.mkdir(parents=True, exist_ok=True)
 
 
-                # Save target results
+                # Save target results (only for non-empty DataFrames)
                 for items, filename in [
                     (top_items_sum, targets_folder/args.targets_sum_csv),
                     (top_items_spots, targets_folder/args.targets_spots_csv),
                     (top_items_quality, targets_folder/args.targets_quality_csv)
                 ]:
-                    items.to_csv(filename, mode='a', header=not Path(filename).exists(), index=False)
+                    if len(items) > 0:
+                        items.to_csv(filename, mode='a', header=not Path(filename).exists(), index=False)
+                    else:
+                        log_print(f"No targets to save for {Path(filename).name} in {folder_name}")
 
                 # Create visualization arrays
                 arrays = {
                     '': np.array(sums).reshape((array_size, array_size)),
-                    '_filtered_peaks': np.array(filtered_peaks).reshape((array_size, array_size)),
-                    '_ft_peaks': np.array(ft_peaks).reshape((array_size, array_size))
+                    '_diffraction_peaks': np.array(filtered_peaks).reshape((array_size, array_size)),
+                    '_lqp': np.array(ft_peaks).reshape((array_size, array_size))
                 }
 
                 # Generate plots

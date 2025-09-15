@@ -16,6 +16,7 @@ from pyREyes.lib.REyes_utils import find_nav_file
 
 FILTERING_OPTIONS = load_filtering_options()
 
+# Helper function for 96-well-plate filtering
 def filter_rotated_points_by_box(rotated_coords: np.ndarray, mean_dist: float) -> np.ndarray:
     """
     Filters the rotated coordinates using the bounding box:
@@ -101,13 +102,11 @@ class CentroidProcessor:
             
             elif isinstance(filtering_value, int):
                 if filtering_value < 3: 
-                    # Use 3x3 grid for eucentricity points
-                    three_by_three_centroids = self._filter_by_grid_selection(centroids, 3)
-                    eucentricity_points = self.find_eucentricity_points(three_by_three_centroids)
-                    centroids = self._filter_by_grid_selection(centroids, filtering_value)
+                    # Use 3x3 grid for eucentricity points when it is 1x1 or 2x2 grid
+                    three_by_three_centroids, eucentricity_points = self._filter_by_grid_selection(centroids, 3)
+                    centroids, _ = self._filter_by_grid_selection(centroids, filtering_value)
                 else: 
-                    centroids = self._filter_by_grid_selection(centroids, filtering_value)
-                    eucentricity_points = self.find_eucentricity_points(centroids)
+                    centroids, eucentricity_points = self._filter_by_grid_selection(centroids, filtering_value)
                     # Get eucentricity points normally
                     if filtering_value > 8:
                         additional_points = CentroidProcessor.find_inner_triangle_points(
@@ -152,16 +151,7 @@ class CentroidProcessor:
             angle_dict = self.compute_neighbor_distances_and_angles(centroids)
             mean_distance = self.robust_mean_combined_distances(angle_dict)
 
-            all_angles = [angle for pair in angle_dict.values() for _, angle in pair]
-            extended_angles = all_angles + [a + 180 for a in all_angles] + [a - 180 for a in all_angles]
-
-            kde = gaussian_kde(extended_angles, bw_method=0.01)
-            x_vals = np.linspace(-90, 270, 1000)
-            y_vals = kde(x_vals)
-
-            # 4. Find two dominant angles and compute rotation
-            small_angle, large_angle = self.find_two_distinct_peaks(x_vals, y_vals)
-            theta = np.radians((large_angle - 90 + small_angle) / 2)
+            theta = self._estimate_statistical_rotation_angle(centroids)
 
             dx, dy = closest[0], closest[1]
 
@@ -219,6 +209,7 @@ class CentroidProcessor:
 
     def _get_eucentricity_points_from_rotated(self, filtered_rotated: np.ndarray) -> List[np.ndarray]:
         """
+        Used in 96-Well-Plate filtering.
         From rotated filtered coordinates, return 9 points:
         - Center point (closest to center of mass of 4 corners)
         - 4 corners (top-left, top-right, bottom-left, bottom-right)
@@ -292,12 +283,20 @@ class CentroidProcessor:
         Returns:
             dominant_angles: list of two distinct peak angles (in degrees)
         """
-        from scipy.signal import find_peaks
+
+        def _ang_dist_180(a, b):
+            """Shortest distance between angles a,b on a 180° circle (degrees)."""
+            d = abs(a - b) % 180.0
+            return min(d, 180.0 - d)
 
         # Find all peaks
         peak_indices, _ = find_peaks(y_vals, prominence=0.001)
         peak_angles = x_vals[peak_indices]
         peak_heights = y_vals[peak_indices]
+
+        # Fold to [0, 180) to avoid edge duplication 
+        peak_angles = peak_angles % 180 
+
 
         # Sort peaks by descending height
         sorted_indices = np.argsort(-peak_heights)
@@ -307,10 +306,7 @@ class CentroidProcessor:
             angle = peak_angles[idx]
 
             # Check for duplicates modulo 180 within tolerance
-            is_duplicate = any(
-                min(abs(angle - prev) % 180, abs(prev - angle) % 180) < tolerance
-                for prev in distinct_peaks
-            )
+            is_duplicate = any(_ang_dist_180(angle, prev) < tolerance for prev in distinct_peaks)
             if not is_duplicate:
                 distinct_peaks.append(angle)
             if len(distinct_peaks) == 2:
@@ -362,6 +358,79 @@ class CentroidProcessor:
 
         return distances_and_angles
 
+    def _estimate_statistical_rotation_angle(
+        self,
+        centroids: List[Tuple[float, float]],
+        plot: bool = False,
+        fig: plt.Figure = None,
+        bins: int = 45
+    ) -> float:
+        """
+        Estimate a global rotation angle (radians) from centroid neighbor orientations
+        using KDE + two dominant peaks. No quadrant adjustment applied here.
+        """
+        # Reuse existing utilities
+        angle_dict = self.compute_neighbor_distances_and_angles(centroids)
+
+        # Pool angles and extend by ±180 for periodicity
+        all_angles = [angle for pair in angle_dict.values() for _, angle in pair]
+        extended_angles = all_angles + [a + 180 for a in all_angles] + [a - 180 for a in all_angles]
+
+        kde = gaussian_kde(extended_angles, bw_method=0.01)
+        x_vals = np.linspace(-90, 270, 1000)
+        y_vals = kde(x_vals)
+
+        small_angle, large_angle = self.find_two_distinct_peaks(x_vals, y_vals)
+        if plot:
+            print("the large and small angles are", large_angle, small_angle)
+
+        # Same formula as well-plate (without quadrant correction)
+        rotation_angle = np.radians((large_angle - 90 + small_angle) / 2)
+
+        # To debug to see if the anles make sense
+        if plot:
+            if fig is None:
+                fig = plt.figure(figsize=(12, 4))
+            axs = fig.subplots(1, 2)
+
+            # 1) Histogram on [0, 180)
+            ax0 = axs[0]
+            ax0.hist(all_angles, bins=bins, range=(0, 180), edgecolor="black")
+            ax0.set_title("Neighbor angle distribution (folded to [0°, 180°))")
+            ax0.set_xlabel("Angle (degrees, vs Y-axis)")
+            ax0.set_ylabel("Count")
+            ax0.set_xlim(0, 180)
+            ax0.grid(True, alpha=0.3)
+
+            # 2) KDE over [-90, 270] with peaks and rotation annotation
+            ax1 = axs[1]
+            ax1.plot(x_vals, y_vals, linewidth=2)
+            ax1.set_title("KDE of angles (extended for periodicity)")
+            ax1.set_xlabel("Angle (degrees)")
+            ax1.set_ylabel("Density")
+            ax1.set_xlim(-90, 270)
+            ax1.grid(True, alpha=0.3)
+
+            # mark peaks
+            ax1.axvline(small_angle, linestyle="--", linewidth=1.5)
+            ax1.axvline(large_angle, linestyle="--", linewidth=1.5)
+            ax1.text(small_angle, max(y_vals)*0.9, f"small={small_angle:.1f}°", rotation=90,
+                    va="top", ha="right")
+            ax1.text(large_angle, max(y_vals)*0.9, f"large={large_angle:.1f}°", rotation=90,
+                    va="top", ha="right")
+
+            # annotate rotation
+            ax1.text(0.02, 0.95,
+                    f"rotation = {(np.degrees(rotation_angle)):.2f}°",
+                    transform=ax1.transAxes, ha="left", va="top",
+                    bbox=dict(boxstyle="round", alpha=0.1, ec="none"))
+
+            fig.tight_layout()
+            fig.savefig("angle_kde_debug.png", dpi=200, bbox_inches="tight")
+
+        return rotation_angle   
+
+
     ### Grid Selection Filtering ###
 
     def _filter_by_grid_selection(self, centroids: List[Tuple[float, float]], target_count: int) -> List[Tuple[float, float]]:
@@ -385,19 +454,20 @@ class CentroidProcessor:
         neighbor_distances = np.linalg.norm(nearest4, axis=1)
         avg_neighbor_dist = np.mean(neighbor_distances)  # average spacing unit
 
-        # Step 3: compute arctan2 angles and assign quadrant-based correction offsets
-        angles = np.arctan2(nearest4[:, 1], nearest4[:, 0])
-        angle_adjustments = np.array([0, -np.pi/2, -np.pi, -3*np.pi/2])
-        adjusted_angles = angles + angle_adjustments
-        # get average rotation angle
-        mean_angle = np.mean(adjusted_angles)
+        # Step 3 (new): estimate a GLOBAL rotation angle statistically (KDE + two peaks)
+        rotation_angle = self._estimate_statistical_rotation_angle(centroids)
 
-        # Step 4: rotate all points by -mean_angle
-        rotation_matrix = self._compute_rotation_matrix(mean_angle)
+        # Step 4 (unchanged interface): build rotation matrix (helper returns R(-θ); we apply .T later → net rotation +θ)
+        rotation_matrix = self._compute_rotation_matrix(rotation_angle)
 
-        if target_count % 2 != 0:
+        # Step 5: select points depending on odd/even target_count
+        if target_count % 2 != 0: # odd target count (e.g., 3x3, 5x5)
             # Rorate the already centered coodinates so that the orientation alisng with the axises
             rotated_coordinates = translated_coordinates @ rotation_matrix.T
+            # Since the coordinates are already centered, the distance from origin
+            # to the farthest point is (n - 1)/2 * avg_neighbor_dist
+            # So if we do n/2 * avg_neighbor_dist it goes to the
+            # middle between the farthest point and the next point
             radius = (target_count / 2) * avg_neighbor_dist
 
             # Select points inside square of width `radius * 2` centered at (0, 0)
@@ -409,7 +479,7 @@ class CentroidProcessor:
             # Map square points back to original coordinates
             square_points_original = coordinates[in_square_mask]
 
-        else:
+        else: # even target count (e.g., 2x2, 4x4)
             rotated_coordinates = coordinates @ rotation_matrix.T
 
             if rotated_coordinates.shape[0] < 4:
@@ -437,12 +507,34 @@ class CentroidProcessor:
             # Grab original coordinates of selected points
             square_points_original = coordinates[in_square_mask]
 
+        # selected originals
+        sel_orig = coordinates[in_square_mask]
+
+        # --- pick corners from the ROTATED subset (not recentered) ---
+        rotated_subset = rotated_coordinates[in_square_mask]
+        x, y = rotated_subset[:, 0], rotated_subset[:, 1]
+
+
+        idx_center = int(np.argmin(np.linalg.norm(rotated_subset, axis=1)))  # closest to origin
+        idx_tl = int(np.argmin(x + y))
+        idx_tr = int(np.argmin(-x + y))
+        idx_bl = int(np.argmin(x - y))
+        idx_br = int(np.argmin(-x - y))
+
+        eucentricity_points = [
+            tuple(sel_orig[idx_center].tolist()),  # center
+            tuple(sel_orig[idx_tl].tolist()),      # top-left
+            tuple(sel_orig[idx_tr].tolist()),      # top-right
+            tuple(sel_orig[idx_bl].tolist()),      # bottom-left
+            tuple(sel_orig[idx_br].tolist()),      # bottom-right
+        ]
+
         centroids = [tuple(row) for row in square_points_original]
-        return centroids
+        return centroids, eucentricity_points
 
     def _compute_rotation_matrix(self, mean_angle: float) -> np.ndarray:
-        cos_theta = np.cos(-mean_angle)
-        sin_theta = np.sin(-mean_angle)
+        cos_theta = np.cos(mean_angle)
+        sin_theta = np.sin(mean_angle)
         return np.array([
             [cos_theta, -sin_theta],
             [sin_theta,  cos_theta]
@@ -565,7 +657,6 @@ class CentroidProcessor:
             
         except Exception as e:
             raise GridSquareError("Error finding farthest points in quadrants") from e
-
 
 
     def find_inner_triangle_points(
