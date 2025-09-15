@@ -1,4 +1,4 @@
-# Diffraction Map Processing Pipeline (REyes v3.3)
+# Diffraction Map Processing Pipeline (REyes v3.4)
 [![License](https://img.shields.io/badge/License-Academic_Use_Only-blue.svg)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.16971798.svg)](https://doi.org/10.5281/zenodo.16971798)
 

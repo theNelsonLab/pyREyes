@@ -1,7 +1,7 @@
 # REyes (Reciprocal Eyes)
 ## End-to-End Autonomous Electron Diffraction
 
-**pyREyes v3.3** - Automated MicroED diffraction data collection and analysis package
+**pyREyes v3.4** - Automated MicroED diffraction data collection and analysis package
 
 This repository contains a series of scripts designed to process diffraction data, generate heatmaps, identify key targets, and manage navigation files for SerialEM. The scripts are structured to be executed in the order outlined below, ensuring that new blocks of data are processed systematically while maintaining data integrity.
 
