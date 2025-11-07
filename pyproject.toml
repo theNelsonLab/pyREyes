@@ -31,10 +31,6 @@ dependencies = [
     "psutil==7.0.0"
 ]
 
-[tool.hatch.build.targets.wheel.force-include]
-"src/pyREyes/lib" = "pyREyes/lib"
-"src/pyREyes/config" = "pyREyes/config"  
-
 [project.scripts]
 grid-squares-0 = "pyREyes.grid_squares:main"
 manual-squares-0-1 = "pyREyes.manual_squares:main"
