@@ -22,7 +22,7 @@ from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs
 # Configuration Constants
 MICROSCOPE_CONFIGS = load_microscope_configs()
 
-__version__ = '3.4.0'
+__version__ = '3.4.10'
 __min_required_version__ = '3.4.0'
 
 class NavFileError(Exception):
@@ -134,7 +134,8 @@ def block_based_target_selection(
     top_n_per_block: int,
     tolerance: float,
     processor_instance,
-    snapshot_output_dir: str = "targets/targets_per_block_diff_snapshots"
+    snapshot_output_dir: str = "targets/targets_per_block_diff_snapshots",
+    target_lists: List[str] = None
 ):
     import os
     import math
@@ -220,10 +221,31 @@ def block_based_target_selection(
             log_print(f"Block {block_id}: Selected {len(selected)} items by {sort_by}, skipped {skipped}")
             return pd.DataFrame(selected)
 
-        q_sel = select_best_unique(top_n_per_block, "QualityRank", "quality", quality_only=True)
-        p_sel = select_best_unique(top_n_per_block, "FTPeaks", "peaks")
-        s_sel = select_best_unique(top_n_per_block, "Sum", "sum")
-        combined = pd.concat([q_sel, p_sel, s_sel]).drop_duplicates()
+        # Default to all lists if not specified
+        if target_lists is None:
+            target_lists = ['sum', 'peaks', 'dqi']
+
+        # Select targets based on specified lists
+        selections = []
+
+        if 'dqi' in target_lists:
+            q_sel = select_best_unique(top_n_per_block, "QualityRank", "quality", quality_only=True)
+            selections.append(q_sel)
+
+        if 'peaks' in target_lists:
+            p_sel = select_best_unique(top_n_per_block, "FTPeaks", "peaks")
+            selections.append(p_sel)
+
+        if 'sum' in target_lists:
+            s_sel = select_best_unique(top_n_per_block, "Sum", "sum")
+            selections.append(s_sel)
+
+        # Combine selected dataframes
+        if selections:
+            combined = pd.concat(selections).drop_duplicates()
+        else:
+            log_print("Warning: No target lists selected, using empty selection", logging.WARNING)
+            combined = pd.DataFrame()
 
         entries = processor_instance.generate_nav_entries(combined, start_item_number=None)
         all_entries.extend(entries)
@@ -417,6 +439,13 @@ def create_parser() -> argparse.ArgumentParser:
         nargs='+',
         help='List of input NAV files (optional)'
     )
+    parser.add_argument(
+        '--target-lists',
+        nargs='+',
+        choices=['sum', 'peaks', 'dqi'],
+        default=['sum', 'peaks', 'dqi'],
+        help='Which target lists to use for block-based selection (default: all three). Can specify 1-3 values. Applies only with --top-target-per-block; category-based selection uses --input-files.'
+    )
     return parser
 
 def main() -> Optional[int]:
@@ -445,13 +474,15 @@ def main() -> Optional[int]:
         
         if args.top_target_per_block is not None:
             log_print(f"Running block-based target selection (top {args.top_target_per_block} per block)")
-            processor = DiffractionDataProcessor(args.microscope) 
+            log_print(f"Using target lists: {', '.join(args.target_lists)}")
+            processor = DiffractionDataProcessor(args.microscope)
             block_based_target_selection(
                 input_csv_path="dif_maps/dif_map_sums.csv",
                 output_file=str(Path('targets') / args.output),
                 top_n_per_block=args.top_target_per_block,
                 tolerance=args.tolerance,
-                processor_instance=processor
+                processor_instance=processor,
+                target_lists=args.target_lists
             )
         else:
             log_print(f"Running category-based target selection (top {args.top_target_per_category} per category)")

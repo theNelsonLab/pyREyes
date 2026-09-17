@@ -1,6 +1,14 @@
-# Ignore compiled Python files
+# Python
 __pycache__/
 *.pyc
 *.pyo
+
+# Test artifacts
+.pytest_cache/
+
+# Run logs
+REyes_logs/
+
+# macOS
 .DS_Store
 ._*

@@ -21,7 +21,7 @@ from pyREyes.lib.REyes_logging import setup_logging, log_print
 from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs
 from pyREyes.lib.diffraction.DiffractionDataProcessor import DiffractionDataProcessor, DiffractionProcessingError
 
-__version__ = '3.4.0'
+__version__ = '3.4.10'
 __min_required_version__ = '3.4.0'
 
 MICROSCOPE_CONFIGS = load_microscope_configs()

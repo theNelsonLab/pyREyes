@@ -57,7 +57,7 @@ Test the installation by running:
 python -c "import pyREyes; print('pyREyes installation successful')"
 ```
 
-This step concludes installation of pyREyes. Note that AutoProcess 2.0 (https://github.com/theNelsonLab/autoprocess) is one of the dependencies and will be installed automatically, while AutoSolve is still under development and can be obtained from the developers via email until it becomes public later this year.
+This step concludes installation of pyREyes. Note that AutoProcess (Python package `pyautoprocess`, https://github.com/theNelsonLab/autoprocess) is one of the dependencies and will be installed automatically. AutoSolve is not yet public and can be obtained from the developers via email.
 
 ## Part 2: Acquisition PC
 
@@ -68,11 +68,11 @@ Configure SerialEM Low Dose as follows:
 - **Autosave log** is off
 - **Eucentricity in Search** is off
 - **Low Dose View** is LM magnification
-  - E.g. 210x for CETA-D (Talos Arctica)
-  - E.g. 155x for DE Apollo (Talos F200C)
+  - E.g. 210x for Ceta (Talos Arctica)
+  - E.g. 115x for DE Apollo (Talos Arctica); on a Talos F200C with DE Apollo use 155x
 - **Low Dose Record** is DIFFRACTION under parallel beam condition
-  - E.g. 960 mm with 50 um condenser aperture for CETA-D (Talos Arctica)
-  - E.g. 420 mm with 50 um condenser aperture for DE Apollo (Talos F200C)
+  - E.g. 960 mm with 50 um condenser aperture for Ceta (Talos Arctica)
+  - E.g. 420 mm with 50 um condenser aperture for DE Apollo (Talos Arctica)
 
 ### Other Suggested Settings
 
@@ -81,12 +81,23 @@ Configure SerialEM Low Dose as follows:
 
 ### Script Configuration
 
-Depending on the available camera, replace SerialEMsettings-scripts.txt file path in SerialEMsettings.txt with one of provided templates. The line to be changed is line 3 of the SerialEMsettings.txt file.
+Two script packages are provided in `docs/scripts/` of the pyREyes repository:
+
+- `SerialEMsettings-scripts_ARCTICA_CETA_REyes.txt` for a Talos Arctica with a Ceta camera
+- `SerialEMsettings-scripts_ARCTICA_DE_Apollo_REyes.txt` for a Talos Arctica with a DE Apollo camera
+
+Both packages are set up for a Talos Arctica. On a Talos F200C with a DE Apollo camera, use the DE Apollo package, change the montage magnification in `REyes_MNT` from 115x to 155x LM (see [Configurable_SerialEM_params.md](Configurable_SerialEM_params.md), section 1), and start the monitor with `--microscope F200C-Apollo`.
+
+Depending on the available camera, copy one of them to the acquisition PC and point `ScriptPackagePath` in SerialEMsettings.txt to it. The line to be changed is line 3 of the SerialEMsettings.txt file.
 
 ```
 SerialEMSettings
 SystemPath     C:\ProgramData\SerialEM\
-ScriptPackagePath      C:\ProgramData\SerialEM\Scripts\SerialEMsettings-scripts-Apollo.txt
+ScriptPackagePath      C:\ProgramData\SerialEM\Scripts\SerialEMsettings-scripts_ARCTICA_DE_Apollo_REyes.txt
 ```
+
+Start a REyes session by running the `START_REYES` script, and batched collection on navigator points by running `BatchED_Main` (`BatchED_Main_CETA` in the Ceta package). The system-specific values to check in the scripts are listed in [Configurable_SerialEM_params.md](Configurable_SerialEM_params.md), and the differences between the two packages in `docs/scripts/README.md`.
+
+> **NOTE:** The User Guide PDF (`docs/tutorials/User_guide.pdf`) shows the SerialEM script workflow of REyes 3.4.0. In the current scripts the entry points are `START_REYES` and `BatchED_Main`; see `docs/scripts/README.md`.
 
 This step concludes configuration of SerialEM for REyes. Note that minor adjustments of microscope settings and SerialEM scripts might be required to tailor a particular system.

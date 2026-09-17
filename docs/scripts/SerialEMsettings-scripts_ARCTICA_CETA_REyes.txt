@@ -1,0 +1,3018 @@
+MaxMacros	60
+Macro	0
+MacroName START_REYES
+
+################BEFORE STARTING###############
+#  INTEGRATED MULTI-GRID PIPELINE
+#  Supports: Single-grid and Multi-grid modes
+#  Supports: Automated (FSD/Screen/Montage) and Manual (FSD/Screen) workflows
+#
+#  TURN OFF LOW DOSE ON SCOPE
+#  TURN ON LOW DOSE IN SERIALEM
+#  LOAD VIEW PARAMETERS
+#  CHECK SPOT SIZE
+#  LOAD RECORD PARAMETERS
+#  CHECK PARALLEL BEAM CONDITION
+#  For Multi-Grid: ENSURE AUTOLOADER IS PROPERLY LOADED
+###################SETTINGS###################
+
+ClearPersistentVars
+
+Echo
+Echo ================================================
+Echo ===== INTEGRATED MULTI-GRID PIPELINE =====
+Echo ================================================
+Echo
+Echo This pipeline supports:
+Echo - Single-grid and Multi-grid acquisition
+Echo - Automated modes: FSD, Screen, Montage
+Echo - Manual modes: FSD, Screen (single-grid only)
+Echo
+
+# Call setup helper to collect all parameters
+Call Setup_Helper
+
+# Check for unsupported combination: Multi-grid + Manual
+If $single_grid_mode == 0 AND $workflow_type == 2
+   Echo
+   Echo ================================================
+   Echo ERROR: UNSUPPORTED COMBINATION
+   Echo ================================================
+   Echo
+   Echo Multi-grid manual mode is not supported.
+   Echo Please use single-grid mode for manual workflows.
+   Echo
+   Echo ================================================
+   Exit Multi-grid manual mode is not supported
+Endif
+
+# Slot verification (multi-grid only)
+If $single_grid_mode == 0
+   Call Slot_Verification_Helper
+Endif
+
+# Directory setup
+Call Directory_Setup_Helper
+
+# REyes setup prompt (for automated FSD/Screen, optional for Montage, required for Manual)
+If $workflow_type == 1
+   # Automated mode
+   If $pipeline_mode == 1 OR $pipeline_mode == 2
+      # FSD or Screen - REyes required
+      Call REyes_Setup_Automated
+   ElseIf $pipeline_mode == 3
+      # Montage - REyes optional
+      Call REyes_Setup_Optional
+   Endif
+ElseIf $workflow_type == 2
+   # Manual mode - REyes will be prompted after manual selection
+   Echo
+   Echo ================================================
+   Echo Note: REyes setup will be required after manual grid square selection
+   Echo ================================================
+Endif
+
+################# MAIN ACQUISITION LOOP #################
+
+Echo
+Echo ================================================
+Echo ===== STARTING ACQUISITION =====
+Echo ================================================
+
+If $single_grid_mode == 0
+   SlotNum = $MinSlotNum
+Endif
+successful_grids = 0
+failed_grids = 0
+skipped_grids = 0
+
+NewArray grid_results 1 $ItrNum
+NewArray failure_reasons 1 $ItrNum
+
+Loop $ItrNum slotIndex
+
+   current_sample = $sample_names[$slotIndex]
+   current_base_name = $base_names[$slotIndex]
+
+   If $single_grid_mode == 1
+      Echo
+      Echo ========================================
+      Echo ===== PROCESSING SINGLE GRID ==========
+      Echo ========================================
+   Else
+      Echo
+      Echo ========================================
+      Echo ========== PROCESSING SLOT $SlotNum ==========
+      Echo ========================================
+
+      CompareNoCase current_sample SKIP
+      If $reportedValue1 == 0
+         Echo Skipping slot $SlotNum as requested
+         grid_results[$slotIndex] := SKIPPED
+         skipped_grids = $skipped_grids + 1
+         SlotNum = $SlotNum + 1
+         Continue
+      Endif
+   Endif
+
+   Echo Sample: $current_sample
+   If $single_grid_mode == 0
+      Echo Slot: $SlotNum
+   Endif
+   ReportDateTime
+
+   # Skip if slot was marked as problematic during setup (multi-grid only)
+   If $single_grid_mode == 0
+      If $slot_status[$slotIndex] != 1
+         Echo WARNING: Skipping slot $SlotNum - Status: $slot_status[$slotIndex]
+         grid_results[$slotIndex] := FAILED
+
+         # Set failure reason based on status code
+         If $slot_status[$slotIndex] == 0
+            failure_reasons[$slotIndex] := User_requested_skip
+         ElseIf $slot_status[$slotIndex] == -1
+            failure_reasons[$slotIndex] := No_grid_in_slot
+         ElseIf $slot_status[$slotIndex] == -2
+            failure_reasons[$slotIndex] := Directory_creation_error
+         Else
+            failure_reasons[$slotIndex] := Unknown_setup_error
+         Endif
+
+         failed_grids = $failed_grids + 1
+         SlotNum = $SlotNum + 1
+         Continue
+      Endif
+   Endif
+
+   # Set the sample name for pipeline scripts (use base name without -reyes suffix)
+   samplename := $current_base_name
+
+   # Set sample directory path
+   sample_dir_path = $base_directory\$current_sample
+   Echo Preparing grid: $current_sample
+   If $single_grid_mode == 0
+      Echo Slot: $SlotNum
+   Endif
+
+   # LOG ORDER: SaveLogOpenNew BEFORE SetDirectory
+   # SaveLogOpenNew saves previous log in CURRENT directory (wherever we are)
+   # and opens new log. Even if REyes changed directory, this captures it.
+   Echo Opening new log file for: $current_base_name
+   SaveLogOpenNew $current_base_name_$pipeline_name_$yyyymmdd
+   Echo New log opened: $current_base_name_$pipeline_name_$yyyymmdd.log
+
+   # Now change to grid directory
+   Try
+      SetDirectory $sample_dir_path
+      set_directory := $sample_dir_path
+      Echo Working directory set to: $sample_dir_path
+   Catch
+      Echo ERROR: Could not access directory: $sample_dir_path
+      If $single_grid_mode == 1
+         Exit Cannot proceed without sample directory
+      Else
+         Echo Skipping slot $SlotNum ($current_sample)
+         grid_results[$slotIndex] := FAILED
+         failure_reasons[$slotIndex] := Directory_access_error
+         failed_grids = $failed_grids + 1
+         SlotNum = $SlotNum + 1
+         Continue
+      Endif
+   EndTry
+
+   # Log header information now that we're in the correct directory
+   Echo ================================================
+   Echo Log file: $current_base_name_$pipeline_name_$yyyymmdd.log
+   Echo Grid directory: $sample_dir_path
+   Echo Sample: $current_sample
+   If $single_grid_mode == 0
+      Echo Slot: $SlotNum
+   Endif
+   ReportDateTime
+   Echo ================================================
+
+   # Load the cartridge (multi-grid mode only)
+   If $single_grid_mode == 0
+      Echo Loading cartridge from slot $SlotNum...
+      Try
+         SetColumnOrGunValve 0
+         LoadCartridge $SlotNum
+         Echo Successfully loaded cartridge from slot $SlotNum
+         Delay 3 sec
+      Catch
+         Echo ERROR: Failed to load cartridge from slot $SlotNum
+         grid_results[$slotIndex] := FAILED
+         failure_reasons[$slotIndex] := Cartridge_load_error
+         failed_grids = $failed_grids + 1
+         SlotNum = $SlotNum + 1
+         Continue
+      EndTry
+   Else
+      Echo Using grid already loaded on stage
+   Endif
+
+   # Reset partial completion flag
+   partial_completion := 0
+
+   # Execute the appropriate pipeline helper
+   If $workflow_type == 1
+      # Automated mode - entire pipeline in Try block
+      Try
+         Call Automated_Pipeline_Helper
+
+         # Check results from helper (partial_completion set by helper if no targets)
+         If $partial_completion == 1
+            # Already set by helper (no targets found)
+            successful_grids = $successful_grids + 1
+         Else
+            # Mark as successful
+            grid_results[$slotIndex] := SUCCESS
+            failure_reasons[$slotIndex] := None
+            successful_grids = $successful_grids + 1
+            Echo SUCCESS: $current_sample completed without errors
+         Endif
+
+      Catch
+         Echo
+         Echo !!!!! ERROR DURING PIPELINE EXECUTION !!!!!
+         Echo Grid: $current_sample (Slot $SlotNum)
+         Echo The pipeline encountered an error and stopped
+         Echo Check individual log files for details
+         grid_results[$slotIndex] := FAILED
+         failure_reasons[$slotIndex] := Pipeline_execution_error
+         failed_grids = $failed_grids + 1
+      EndTry
+
+   ElseIf $workflow_type == 2
+      # Manual mode - Split around Pause to keep Pause OUTSIDE Try blocks
+
+      # PART 1: Montage acquisition (before Pause)
+      Try
+         Call Manual_Pipeline_Part1
+      Catch
+         Echo
+         Echo !!!!! ERROR DURING MONTAGE ACQUISITION !!!!!
+         Echo Grid: $current_sample
+         Echo Check log files for details
+         grid_results[$slotIndex] := FAILED
+         failure_reasons[$slotIndex] := Montage_acquisition_error
+         failed_grids = $failed_grids + 1
+         Continue
+      EndTry
+
+      # -----------------------------------------------------------
+      # CRITICAL PAUSE - OUTSIDE ALL TRY/CATCH BLOCKS
+      # -----------------------------------------------------------
+
+      Echo
+      Echo ================================================
+      Echo ===== MANUAL INTERVENTION REQUIRED =====
+      Echo ================================================
+      Echo
+      Echo CRITICAL: You must now MANUALLY select grid squares
+      Echo
+      Echo The montage has been acquired and is in the Navigator.
+      Echo
+      Echo Instructions:
+      Echo 1. Open the Navigator window (if not already open)
+      Echo 2. Review the montage that was just acquired
+      Echo 3. Manually ADD POINT ITEMS for desired grid squares
+      Echo 4. Make sure points are added to the navigator
+      Echo 5. You can add as many or as few points as you want
+      Echo 6. A dialog will appear asking if grid squares have been added
+      Echo 7. Click NO to add them manually (script stays paused)
+      Echo 8. When completely done, click YES to continue the pipeline
+      Echo
+      Echo ================================================
+
+      Pause Have the grid squares been already added? (Press NO to add them manually)
+
+      Echo
+      Echo User confirmed manual grid square selection is complete
+
+      # -----------------------------------------------------------
+      # PART 2: Continue pipeline after Pause
+      # -----------------------------------------------------------
+
+      Try
+         Call Manual_Pipeline_Part2
+
+         # Check results from helper (partial_completion set by helper if no targets)
+         If $partial_completion == 1
+            # Already set by helper (no targets found)
+            successful_grids = $successful_grids + 1
+         Else
+            # Mark as successful
+            grid_results[$slotIndex] := SUCCESS
+            failure_reasons[$slotIndex] := None
+            successful_grids = $successful_grids + 1
+            Echo SUCCESS: $current_sample completed without errors
+         Endif
+
+      Catch
+         Echo
+         Echo !!!!! ERROR DURING PIPELINE EXECUTION !!!!!
+         Echo Grid: $current_sample
+         Echo The pipeline encountered an error and stopped
+         Echo Check individual log files for details
+         grid_results[$slotIndex] := FAILED
+         failure_reasons[$slotIndex] := Pipeline_execution_error
+         failed_grids = $failed_grids + 1
+      EndTry
+
+   Endif
+
+   # Close navigator for this grid (multi-grid automated mode only)
+   # Single-grid mode and manual mode keep Navigator open for user
+   If $workflow_type == 1 AND $single_grid_mode == 0
+      Try
+         CloseNavigator
+         Echo Navigator closed for this grid
+      Catch
+         Echo Note: Navigator was already closed or could not be closed
+      EndTry
+   Else
+      If $single_grid_mode == 1
+         Echo Single-grid mode: Navigator remains open
+      Else
+         Echo Manual mode: Navigator remains open
+      Endif
+   Endif
+
+   # Grid processing complete
+   # Log will be closed by next iteration or by summary log opening
+   Echo Grid processing complete: $current_base_name
+   Echo ================================================
+
+   # Increment slot number (multi-grid only)
+   If $single_grid_mode == 0
+      SlotNum = $SlotNum + 1
+
+      # Pause between grids
+      If $SlotNum <= $MaxSlotNum
+         Echo
+         Echo Preparing for next grid...
+         Echo Brief pause to ensure system is ready...
+         Delay 5 sec
+      Endif
+   Endif
+
+EndLoop
+
+################# CLEANUP #################
+
+# LOG ORDER: SaveLogOpenNew BEFORE SetDirectory
+# This saves last grid's log (wherever we are) and opens summary log
+Echo All grids processed - opening summary log
+If $single_grid_mode == 1
+   SaveLogOpenNew SingleGrid_$pipeline_name_$yyyymmdd_summary
+Else
+   SaveLogOpenNew MultiGrid_$pipeline_name_$yyyymmdd_summary
+Endif
+
+# Now return to base directory
+SetDirectory $base_directory
+Echo ================================================
+Echo SUMMARY LOG
+Echo Directory: $base_directory
+Echo ================================================
+
+Echo
+Echo ============= CLEANUP =============
+
+If $single_grid_mode == 0
+   Echo Unloading final grid back to autoloader...
+   Try
+      SetColumnOrGunValve 0
+      UnloadCartridge
+      Echo Successfully unloaded final grid
+   Catch
+      Echo WARNING: Could not unload final grid - may need manual unload
+   EndTry
+Else
+   Echo Single grid mode - grid remains on stage
+   Echo Please unload manually when ready
+Endif
+
+################# FINAL SUMMARY #################
+
+Echo
+Echo
+Echo ================================================
+Echo ============= PROCESSING COMPLETE ==============
+Echo ================================================
+If $single_grid_mode == 1
+   Echo Acquisition mode: Single Grid
+Else
+   Echo Acquisition mode: Multi-Grid
+Endif
+If $workflow_type == 1
+   Echo Workflow: Automated
+Else
+   Echo Workflow: Manual
+Endif
+Echo Pipeline mode: $pipeline_name
+If $single_grid_mode == 1
+   Echo Total grids: 1
+Else
+   Echo Total grids in range: $ItrNum
+Endif
+Echo Successful: $successful_grids
+Echo Failed: $failed_grids
+If $single_grid_mode == 0
+   Echo Skipped: $skipped_grids
+Endif
+Echo
+Echo Detailed Results:
+Echo ------------------------------------------------
+Echo (PARTIAL = screening completed but no targets found)
+Echo
+
+If $single_grid_mode == 1
+   Echo Grid ($sample_names[1]): $grid_results[1] - $failure_reasons[1]
+Else
+   SlotNum = $MinSlotNum
+   Loop $ItrNum slotIndex
+      Echo Slot $SlotNum ($sample_names[$slotIndex]): $grid_results[$slotIndex] - $failure_reasons[$slotIndex]
+      SlotNum = $SlotNum + 1
+   EndLoop
+Endif
+
+Echo ================================================
+Echo
+Echo Next Steps:
+If $pipeline_mode == 1
+   Echo - Check movie data in movies\ subdirectory for each sample
+   Echo - Review diffraction patterns in StepScan folders
+   Echo - Analyze data with REyes processing pipeline
+ElseIf $pipeline_mode == 2
+   Echo - Review diffraction patterns in StepScan folders
+   Echo - Select targets manually if needed for movie collection
+ElseIf $pipeline_mode == 3
+   Echo - Review montage images in each sample directory
+   Echo - Assess grid quality and ice thickness
+Endif
+Echo - Check individual log files in each sample directory
+If $single_grid_mode == 1
+   Echo - Check log file: SingleGrid_$pipeline_name_$yyyymmdd.log
+Else
+   Echo - Check log file: MultiGrid_$pipeline_name_$yyyymmdd.log
+Endif
+
+# Ensure column valve is closed for safety
+SetColumnOrGunValve 0
+Echo
+Echo Column valve closed for safety
+Echo All processing complete!
+
+# Final logging
+SaveLog
+EndMacro
+
+Macro	1
+ScriptName BatchED_Main_CETA
+
+################BEFORE STARTING###############
+#
+#  BatchED - Unified Batch Electron Diffraction & Imaging
+#  CETA-M CAMERA VERSION
+#
+#  Parent script that collects parameters and dispatches to:
+#  - BatchED_Rotation_CETA: Continuous rotation diffraction (Record mode)
+#  - BatchED_Still_CETA: Still diffraction snapshots (Record mode)
+#  - BatchED_MultiAngle_CETA: Snapshots at +60, +30, 0, -30, -60 degrees (Record mode)
+#  - BatchED_Imaging_CETA: Still imaging snapshots (Search mode)
+#
+#  Requirements:
+#  - Navigator must be open with targets already added
+#  - CETA-M camera configured in SerialEM
+#
+#  CETA-M SPECIFIC FEATURES:
+#  - Uses frame-by-frame saving (not folder-based)
+#  - Camera distance: 840 mm -> 790 mm calibrated
+#  - Rotation increment calibrated for frame-saving overhead
+#
+##############################################
+
+ClearPersistentVars
+
+Echo
+Echo ================================================
+Echo ===== BATCHED - UNIFIED SETUP (CETA-M) =====
+Echo ================================================
+Echo
+
+##############ACQUISITION MODE#############
+
+Echo Choose acquisition mode:
+Echo 1 = Diffraction (Record mode - parallel beam)
+Echo 2 = Imaging (Search mode - imaging beam)
+Echo
+EnterOneNumber Enter acquisition mode (1 = Diffraction, 2 = Imaging):
+If $reportedValue1 != 1 AND $reportedValue1 != 2
+   Exit Acquisition mode must be 1 (Diffraction) or 2 (Imaging)
+Endif
+acq_mode := $reportedValue1
+
+If $acq_mode == 1
+   Echo Mode: DIFFRACTION (Record)
+
+   # Ask diffraction type
+   Echo
+   Echo Choose diffraction type:
+   Echo 1 = Continuous rotation (tilt during exposure)
+   Echo 2 = Still snapshot (no tilt during exposure)
+   Echo 3 = Multi-angle snapshots (5 angles: +60, +30, 0, -30, -60)
+   Echo
+   EnterOneNumber Enter diffraction type (1 = Rotation, 2 = Still, 3 = Multi-angle):
+   If $reportedValue1 != 1 AND $reportedValue1 != 2 AND $reportedValue1 != 3
+      Exit Diffraction type must be 1 (Rotation), 2 (Still), or 3 (Multi-angle)
+   Endif
+   diff_type := $reportedValue1
+
+   If $diff_type == 1
+      Echo Type: CONTINUOUS ROTATION
+   ElseIf $diff_type == 2
+      Echo Type: STILL SNAPSHOT
+   ElseIf $diff_type == 3
+      Echo Type: MULTI-ANGLE SNAPSHOTS (+60, +30, 0, -30, -60)
+   Endif
+
+ElseIf $acq_mode == 2
+   Echo Mode: IMAGING (Search)
+   diff_type := 0
+Endif
+
+##############COMMON PARAMETERS#############
+
+# Working directory
+ReportDirectory
+set_directory := $reportedValue1
+Echo Working directory: $set_directory
+
+# Sample/Compound Name
+Echo
+EnterString compound_name Enter your compound/sample name:
+compoundname := $compound_name
+Echo Compound name: $compoundname
+
+# Navigator item counting
+Echo
+Echo Navigator Setup:
+Echo - You should have already added your target points
+Echo - The script needs to know where your targets start
+Echo
+EnterOneNumber Enter the LAST navigator item number BEFORE your targets were added:
+If $reportedValue1 < 0
+   Exit Navigator offset must be positive
+Endif
+xtalct := $reportedValue1
+Echo Starting from navigator item: $xtalct
+
+EnterOneNumber Enter the NUMBER of targets you want to collect:
+If $reportedValue1 < 1
+   Exit Must collect at least 1 target
+Endif
+nitems := $reportedValue1
+Echo Number of targets: $nitems
+
+##############MODE-SPECIFIC PARAMETERS#############
+
+# Frame acquisition rate
+Echo
+Echo Frame Acquisition Rate:
+Echo - Time per frame in seconds
+Echo - CETA-M typical: 3.0 seconds (calibrated)
+Echo - Range: 0.5 to 10 seconds
+Echo
+EnterOneNumber Enter frame time in seconds:
+If $reportedValue1 < 0.1 or $reportedValue1 > 10
+   Exit Frame time must be between 0.1 and 10 seconds
+Endif
+acqrate := $reportedValue1
+Echo Frame time: $acqrate seconds per frame
+
+# Binning
+Echo
+Echo Camera Binning:
+Echo - CETA-M recommended: 2x
+Echo - Options: 1, 2, 4, 8, or 16
+Echo - Higher binning = faster readout, lower resolution
+Echo
+EnterOneNumber Enter binning factor (1, 2, 4, 8, or 16):
+If $reportedValue1 != 1 AND $reportedValue1 != 2 AND $reportedValue1 != 4 AND $reportedValue1 != 8 AND $reportedValue1 != 16
+   Exit Binning must be 1, 2, 4, 8, or 16
+Endif
+binning := $reportedValue1
+Echo Binning: $binning
+
+# Rotation-specific parameters
+If $acq_mode == 1 AND $diff_type == 1
+
+   # Tilt range
+   Echo
+   Echo Tilt Range:
+   Echo - Typical values: 30-60 degrees
+   Echo - Range: 5 to 70 degrees
+   Echo
+   EnterOneNumber Enter maximum positive tilt angle:
+   If $reportedValue1 < 5 or $reportedValue1 > 70
+      Exit Tilt angle must be between 5 and 70 degrees
+   Endif
+   startangle := $reportedValue1
+   finalangle := -1 * $startangle
+   tiltrange := 2 * $startangle
+   range := P$startangletoN$finalangle
+   Echo Tilt range: +$startangle to $finalangle degrees
+
+   # Rotation rate
+   Echo
+   Echo Rotation Rate:
+   Echo - CETA-M typical: 0.3 dps (calibrated)
+   Echo - Range: 0.1 to 5.0 dps
+   Echo - Slower = better signal but longer exposure
+   Echo
+   EnterOneNumber Enter rotation rate in degrees per second:
+   If $reportedValue1 < 0.1 or $reportedValue1 > 5
+      Exit Rotation rate must be between 0.1 and 5 dps
+   Endif
+   rotrate := $reportedValue1
+   Echo Rotation rate: $rotrate dps
+
+   # Calculate rotation increment (fractional tilt stage rate)
+   # CETA-M calibrated: 0.004 for 0.3 dps nominal (accounts for frame-saving overhead)
+   # For other rates, scale proportionally from the calibrated value
+   rotincr := 0.004 * ($rotrate / 0.3)
+   Echo Rotation increment: $rotincr (calibrated for CETA-M frame overhead)
+
+   # Calculate recording time
+   recordtime := $tiltrange / $rotrate
+   Echo Exposure time: $recordtime seconds
+
+Endif
+
+# Number of sweeps (Diffraction modes only)
+If $acq_mode == 1
+   Echo
+   Echo Multiple Sweeps:
+   Echo - Collect multiple acquisitions on the same crystal
+   Echo - Typically 1 (single collection per target)
+   Echo
+   EnterOneNumber Enter number of sweeps per target:
+   If $reportedValue1 < 1 or $reportedValue1 > 10
+      Exit Number of sweeps must be between 1 and 10
+   Endif
+   nsweeps := $reportedValue1
+   Echo Sweeps per target: $nsweeps
+Endif
+
+##############SCOPE PARAMETERS#############
+
+# Spot size and camera length (Diffraction modes only)
+If $acq_mode == 1
+   ReportSpotSize
+   spsz := $reportedValue1
+   Echo Spot size: $spsz
+
+   ReportCameraLength
+   dist := $reportedValue1 * 1000
+   Echo Talos camera length: $dist mm
+
+   # Convert to CETA calibrated camera length
+   # CETA-M calibration: 840 mm -> 790 mm
+   If $dist == 840
+      cetadist := 790
+   ElseIf $dist == 960
+      cetadist := 960
+   Else
+      Echo Warning: Unusual camera length detected
+      cetadist := $dist
+   Endif
+   Echo CETA calibrated camera length: $cetadist mm
+
+   # Temperature label
+   # Note: Hardcoded to 'c' (cryo) - change to 'rt' for room temperature
+   temp := c
+Endif
+
+##############SUMMARY#############
+
+Echo
+Echo ================================================
+Echo ===== ACQUISITION SUMMARY =====
+Echo ================================================
+Echo Compound: $compoundname
+
+If $acq_mode == 1
+   If $diff_type == 1
+      Echo Mode: DIFFRACTION - CONTINUOUS ROTATION (CETA-M)
+      Echo Tilt range: +$startangle to $finalangle degrees ($tiltrange total)
+      Echo Rotation rate: $rotrate dps
+      Echo Rotation increment: $rotincr (CETA-M calibrated)
+      Echo Exposure time: $recordtime seconds
+   ElseIf $diff_type == 2
+      Echo Mode: DIFFRACTION - STILL SNAPSHOT
+   ElseIf $diff_type == 3
+      Echo Mode: DIFFRACTION - MULTI-ANGLE SNAPSHOTS
+      Echo Angles: +60, +30, 0, -30, -60 degrees (5 per target)
+   Endif
+   Echo Frame time: $acqrate s/frame
+   Echo Binning: $binning
+   Echo Sweeps per target: $nsweeps
+   Echo Camera length: $cetadist mm (CETA-M calibrated)
+   Echo Spot size: $spsz
+   Echo Temperature: $temp
+ElseIf $acq_mode == 2
+   Echo Mode: IMAGING (Search)
+   Echo Frame time: $acqrate s/frame
+   Echo Binning: $binning
+Endif
+
+Echo Starting navigator item: $xtalct
+Echo Number of targets: $nitems
+Echo ================================================
+Echo
+
+YesNoBox Ready to start BatchED acquisition?
+If $reportedValue1 == 0
+   Exit User cancelled acquisition
+Endif
+
+##############DISPATCH#############
+
+SaveLogOpenNew $compoundname_BatchED_CETA
+Echo
+Echo Starting BatchED acquisition for CETA-M camera...
+Echo
+ReportDateTime
+
+If $acq_mode == 1 AND $diff_type == 1
+   MakeDirectory $set_directory\movies
+   Echo Created subdirectory: movies
+   Echo Dispatching to: BatchED_Rotation_CETA
+   Call BatchED_Rotation_CETA
+ElseIf $acq_mode == 1 AND $diff_type == 2
+   MakeDirectory $set_directory\snapshots
+   Echo Created subdirectory: snapshots
+   Echo Dispatching to: BatchED_Still_CETA
+   Call BatchED_Still_CETA
+ElseIf $acq_mode == 1 AND $diff_type == 3
+   MakeDirectory $set_directory\snapshots
+   Echo Created subdirectory: snapshots
+   Echo Dispatching to: BatchED_MultiAngle_CETA
+   Call BatchED_MultiAngle_CETA
+ElseIf $acq_mode == 2
+   MakeDirectory $set_directory\imaging
+   Echo Created subdirectory: imaging
+   Echo Dispatching to: BatchED_Imaging_CETA
+   Call BatchED_Imaging_CETA
+Endif
+
+##############CLEANUP#############
+
+Echo
+Echo ================================================
+Echo BATCHED ACQUISITION COMPLETE
+Echo ================================================
+Echo
+Echo Processed $nitems targets
+Echo
+ReportDateTime
+ReportClock
+
+# Return scope to safe state
+TiltTo 0
+ScreenDown
+SetBeamBlank 1
+SetColumnOrGunValve 0
+
+Echo
+Echo Scope returned to safe state
+Echo - Tilt: 0 degrees
+Echo - Screen: Down
+Echo - Beam: Blanked
+Echo - Column valve: Closed
+Echo
+Echo BatchED complete!
+
+SaveLog
+EndMacro
+
+Macro	2
+MacroName REYES_Setup_Standalone
+
+################BEFORE STARTING###############
+#
+#  Use this script when you reopen SerialEM and want to:
+#  - Run REyes_STPSCN on existing grid
+#  - Run REyes_DFMV with custom targets
+#  - Continue any partial workflow
+#
+#  This sets up all required parameters:
+#  - Sample name (samplename)
+#  - Working directory (set_directory)
+#  - Montage dimension (mnt_size) - for REyes_MNT
+#  - Diffraction map dimension (map_size) - for REyes_STPSCN
+#  - Tilt range (selected_tilt) - for REyes_DFMV
+#
+###################SETTINGS###################
+
+Echo
+Echo ================================================
+Echo ===== REYES PARAMETER SETUP =====
+Echo ================================================
+Echo
+Echo This script establishes parameters for REyes helpers
+Echo Use this when reopening SerialEM to continue work
+Echo
+
+##############LOCATIONS AND NAMES#############
+
+#LOG DATE
+ReportDateTime
+yyyymmdd := $reportedValue1
+Echo Date: $yyyymmdd
+
+#SET DIRECTORY
+UserSetDirectory [Choose the sample directory where files are saved]
+set_directory := $reportedValue1
+SetDirectory $set_directory
+Echo Chosen directory: $set_directory
+
+#SET SAMPLE NAME
+EnterString sample_name What is your sample name?
+samplename := $sample_name
+Echo Sample name: $samplename
+
+Echo
+Echo ================================================
+Echo ===== MONTAGE PARAMETERS =====
+Echo ================================================
+Echo
+
+#MONTAGE DIMENSIONS
+Echo Enter montage dimension (used by REyes_MNT)
+Echo - Creates an NxN grid montage at 115x magnification
+Echo - Typical values: 3x3, 4x4, or 5x5
+Echo - Range: 2 to 9
+Echo
+EnterOneNumber Enter desired montage dimension:
+If $reportedValue1 < 2 or $reportedValue1 > 9
+   Exit Montage size must be between 2 and 9
+Endif
+mnt_size := $reportedValue1
+Echo Montage size: $mnt_size x $mnt_size
+
+Echo
+Echo ================================================
+Echo ===== DIFFRACTION MAP PARAMETERS =====
+Echo ================================================
+Echo
+
+#STEPSCAN/DIFFRACTION MAP DIMENSIONS
+Echo Enter diffraction map dimension (used by REyes_STPSCN)
+Echo - Recommended: Odd numbers (3, 5, 7, 9, etc.)
+Echo - Typical values: 5x5 or 7x7
+Echo - Range: 3 to 21
+Echo
+EnterOneNumber Enter desired map dimension (odd values recommended):
+If $reportedValue1 < 3 or $reportedValue1 > 21
+   Exit Map size must be between 3 and 21
+Endif
+map_size := $reportedValue1
+Echo Diffraction map size: $map_size x $map_size
+
+Echo
+Echo ================================================
+Echo ===== TILT RANGE PARAMETERS =====
+Echo ================================================
+Echo
+
+#TILT RANGE FOR MOVIE (REyes_DFMV)
+Echo Enter tilt range for continuous rotation movies (used by REyes_DFMV)
+Echo - This sets the maximum tilt angle (+/-) for diffraction data
+Echo - REyes_DFMV will rotate from +angle to -angle
+Echo - Typical values: 50-60 degrees
+Echo - Range: 5 to 70 degrees
+Echo
+EnterOneNumber Enter max positive tilt angle:
+If $reportedValue1 < 5 or $reportedValue1 > 70
+   Exit Tilt angle must be between 5 and 70 degrees
+Endif
+selected_tilt := $reportedValue1
+
+Echo Tilt range: +$selected_tilt to -$selected_tilt degrees
+
+Echo
+Echo ================================================
+Echo ===== SETUP COMPLETE =====
+Echo ================================================
+Echo
+Echo Parameters established:
+Echo - Sample name: $samplename
+Echo - Working directory: $set_directory
+Echo - Montage size: $mnt_size x $mnt_size
+Echo - Diffraction map size: $map_size x $map_size
+Echo - Tilt range: +$selected_tilt to -$selected_tilt degrees
+Echo
+Echo You can now run:
+Echo - REyes_MNT (for grid montage)
+Echo - REyes_STPSCN (for diffraction mapping)
+Echo - REyes_DFMV (for target movie collection)
+Echo - Or any other REyes helper macro
+Echo
+Echo ================================================
+
+# Optional: Open a log file for subsequent work
+YesNoBox Do you want to open a new log file for this session?
+If $reportedValue1 == 1
+   SaveLogOpenNew $samplename_resumed_$yyyymmdd
+   Echo Log file opened: $samplename_resumed_$yyyymmdd.log
+   Echo Working directory: $set_directory
+   Echo Sample: $samplename
+   ReportDateTime
+Else
+   Echo No log file opened - you can start logging manually if needed
+Endif
+
+Echo
+Echo Setup complete! Ready to run REyes macros.
+
+SaveLog
+EndMacro
+
+Macro	3
+
+EndMacro
+
+Macro	4
+MacroName Setup_Helper
+
+# This helper collects all pipeline parameters
+# Sets persistent variables for main script to use
+
+#LOG DATE
+ReportDateTime
+yyyymmdd := $reportedValue1
+Echo Date: $yyyymmdd
+
+##################USER INPUTS##################
+
+Echo
+Echo ================================================
+Echo ========== PIPELINE SETUP ==========
+Echo ================================================
+Echo
+Echo Starting Pipeline Handler....
+Echo Please provide the following information:
+
+#GET ACQUISITION MODE (SINGLE vs MULTI-GRID)
+Echo
+Echo Choose acquisition mode:
+Echo 1 = Single Grid (grid already loaded on stage)
+Echo 2 = Multi-Grid (use autoloader for multiple grids)
+EnterOneNumber Enter acquisition mode (1 for Single, 2 for Multi-Grid):
+If $reportedValue1 < 1 or $reportedValue1 > 2
+   Exit Acquisition mode must be 1 (Single) or 2 (Multi-Grid)
+Endif
+acquisition_mode := $reportedValue1
+
+If $acquisition_mode == 1
+   Echo Acquisition mode: SINGLE GRID (grid already on stage)
+   single_grid_mode := 1
+   ItrNum := 1
+ElseIf $acquisition_mode == 2
+   Echo Acquisition mode: MULTI-GRID (autoloader)
+   single_grid_mode := 0
+Endif
+
+#GET WORKFLOW TYPE (AUTOMATED vs MANUAL)
+Echo
+Echo Choose workflow type:
+Echo 1 = Automated (no manual intervention)
+Echo 2 = Manual (pause for manual grid square selection)
+EnterOneNumber Enter workflow type (1 for Automated, 2 for Manual):
+If $reportedValue1 < 1 or $reportedValue1 > 2
+   Exit Workflow type must be 1 (Automated) or 2 (Manual)
+Endif
+workflow_type := $reportedValue1
+
+If $workflow_type == 1
+   Echo Workflow: AUTOMATED
+Else
+   Echo Workflow: MANUAL
+Endif
+
+#MODE-SPECIFIC PRE-FLIGHT CHECKS
+Echo
+Echo ================================================
+
+If $single_grid_mode == 1
+   Echo ========== SINGLE GRID PRE-FLIGHT ==========
+   Echo ================================================
+   Echo
+   Echo CRITICAL PRE-FLIGHT CHECKS:
+   Echo
+   Echo 1. Align beam and check microscope settings
+   Echo 2. LOAD your grid onto the stage
+   Echo 3. Ensure grid is properly centered
+   Echo 4. Check focus and beam settings
+   Echo
+   Echo ================================================
+
+   YesNoBox Is a grid LOADED on the stage and ready for acquisition? Click YES to continue.
+   If $reportedValue1 == 0
+      Echo
+      Echo User indicated grid is NOT ready on stage
+      Echo Please load grid and verify microscope is ready
+      Exit User aborted - Pre-flight checks not complete
+   Endif
+Else
+   Echo ========== MULTI-GRID PRE-FLIGHT ==========
+   Echo ================================================
+   Echo
+   Echo CRITICAL PRE-FLIGHT CHECKS:
+   Echo
+   Echo 1. Align beam and check microscope settings
+   Echo 2. UNLOAD any grid currently in the stage
+   Echo 3. Ensure all grids are in autoloader slots only
+   Echo 4. If a grid is loaded, the script will skip that slot
+   Echo
+   Echo ================================================
+
+   YesNoBox Is the stage EMPTY and all grids in the autoloader? Click YES to continue.
+   If $reportedValue1 == 0
+      Echo
+      Echo User indicated stage is NOT empty or setup incomplete
+      Echo Please unload any grid and verify autoloader is ready
+      Exit User aborted - Pre-flight checks not complete
+   Endif
+Endif
+
+#SET BASE DIRECTORY
+UserSetDirectory [Choose the BASE directory where files will be saved]
+base_directory := $reportedValue1
+Echo Base directory: $base_directory
+
+#GET SLOT RANGE (ONLY FOR MULTI-GRID MODE)
+If $single_grid_mode == 0
+   EnterOneNumber Enter minimum slot number (typically 1-12):
+   If $reportedValue1 < 1 or $reportedValue1 > 12
+      Exit Minimum slot number must be between 1 and 12
+   Endif
+   MinSlotNum := $reportedValue1
+   Echo Minimum slot: $MinSlotNum
+
+   EnterOneNumber Enter maximum slot number (must be >= minimum):
+   If $reportedValue1 < $MinSlotNum or $reportedValue1 > 12
+      Exit Maximum slot must be >= minimum slot and <= 12
+   Endif
+   MaxSlotNum := $reportedValue1
+   Echo Maximum slot: $MaxSlotNum
+
+   #CALCULATE NUMBER OF SLOTS
+   ItrNum := $MaxSlotNum - $MinSlotNum + 1
+   Echo Will process $ItrNum slots (slots $MinSlotNum to $MaxSlotNum)
+Endif
+
+#GET PIPELINE MODE
+Echo
+If $workflow_type == 1
+   # Automated workflow
+   Echo Choose pipeline mode:
+   Echo 1 = FSD (Montage -> Eucentricity -> StepScan -> Targets -> Movies)
+   Echo 2 = Screen (Montage -> Eucentricity -> StepScan, NO movies)
+   Echo 3 = Montage Only (Grid overview images ONLY, no processing)
+   EnterOneNumber Enter pipeline mode (1 for FSD, 2 for Screen, 3 for Montage):
+   If $reportedValue1 < 1 or $reportedValue1 > 3
+      Exit Pipeline mode must be 1 (FSD), 2 (Screen), or 3 (Montage)
+   Endif
+Else
+   # Manual workflow - no Montage-only option
+   Echo Choose pipeline mode for MANUAL workflow:
+   Echo 1 = Manual FSD (Montage -> PAUSE -> Manual Selection -> Full Pipeline with Movies)
+   Echo 2 = Manual Screen (Montage -> PAUSE -> Manual Selection -> Screen Pipeline, NO movies)
+   EnterOneNumber Enter pipeline mode (1 for Manual FSD, 2 for Manual Screen):
+   If $reportedValue1 < 1 or $reportedValue1 > 2
+      Exit Pipeline mode must be 1 (Manual FSD) or 2 (Manual Screen)
+   Endif
+Endif
+pipeline_mode := $reportedValue1
+
+If $pipeline_mode == 1
+   If $workflow_type == 1
+      Echo Pipeline mode: AUTOMATED FSD (with diffraction movies)
+      pipeline_name := FSD
+   Else
+      Echo Pipeline mode: MANUAL FSD (with diffraction movies)
+      pipeline_name := Manual_FSD
+   Endif
+ElseIf $pipeline_mode == 2
+   If $workflow_type == 1
+      Echo Pipeline mode: AUTOMATED SCREEN (no movies)
+      pipeline_name := Screen
+   Else
+      Echo Pipeline mode: MANUAL SCREEN (no movies)
+      pipeline_name := Manual_Screen
+   Endif
+ElseIf $pipeline_mode == 3
+   Echo Pipeline mode: MONTAGE ONLY (overview images)
+   pipeline_name := Montage
+Endif
+
+#GET MONTAGE DIMENSIONS
+If $single_grid_mode == 1
+   EnterDefaultedNumber 8 -1 Enter desired montage dimension (between 2 and 9):
+Else
+   EnterDefaultedNumber 8 -1 Enter desired montage dimension for ALL grids (between 2 and 9):
+Endif
+If $reportedValue1 < 2 or $reportedValue1 > 9
+   Exit Montage size must be between 2 and 9
+Endif
+mnt_size := $reportedValue1
+If $single_grid_mode == 1
+   Echo Montage size: $mnt_size
+Else
+   Echo Montage size for all grids: $mnt_size
+Endif
+
+#GET STEPSCAN DIMENSIONS (ONLY IF FSD OR SCREEN MODE)
+If $pipeline_mode == 1 or $pipeline_mode == 2
+   If $single_grid_mode == 1
+      EnterDefaultedNumber 11 -1 Enter desired map dimension (odd values recommended, 3-21):
+   Else
+      EnterDefaultedNumber 11 -1 Enter desired map dimension for ALL grids (odd values recommended, 3-21):
+   Endif
+   If $reportedValue1 < 3 or $reportedValue1 > 21
+      Exit Map size must be between 3 and 21
+   Endif
+   map_size := $reportedValue1
+   If $single_grid_mode == 1
+      Echo StepScan map size: $map_size
+   Else
+      Echo StepScan map size for all grids: $map_size
+   Endif
+Endif
+
+#GET TILT RANGE (ONLY IF FSD MODE)
+If $pipeline_mode == 1
+   EnterDefaultedNumber 50 -1 Enter max positive tilt angle for movies (5-70 degrees):
+   If $reportedValue1 < 5 or $reportedValue1 > 70
+      Exit Tilt angle must be between 5 and 70 degrees
+   Endif
+   selected_tilt := $reportedValue1
+   If $single_grid_mode == 1
+      Echo Tilt range: +/- $selected_tilt degrees
+   Else
+      Echo Tilt range for all grids: +/- $selected_tilt degrees
+   Endif
+Endif
+
+#COLLECT SAMPLE NAMES
+Echo
+If $single_grid_mode == 1
+   Echo Enter sample name for the grid on stage:
+   EnterString temp_name Sample name:
+   # Store base name for file naming
+   base_sample_name := $temp_name
+   # Append -reyes suffix: REyes session folders are named <sample>-reyes
+   full_sample_name = $temp_name-reyes
+   Echo Sample: $temp_name (folder: $full_sample_name)
+   NewArray sample_names 1 1
+   NewArray base_names 1 1
+   sample_names[1] := $full_sample_name
+   base_names[1] := $base_sample_name
+Else
+   Echo Now entering sample names for each slot...
+   NewArray sample_names 1 $ItrNum
+   NewArray base_names 1 $ItrNum
+   SlotNum = $MinSlotNum
+
+   Loop $ItrNum slotIndex
+      Echo Enter sample name for slot $SlotNum (or 'SKIP' to skip this slot):
+      EnterString temp_name Sample name for slot $SlotNum:
+
+      CompareNoCase temp_name SKIP
+      If $reportedValue1 == 0
+         Echo Slot $SlotNum will be skipped
+         sample_names[$slotIndex] := SKIP
+         base_names[$slotIndex] := SKIP
+      Else
+         # Append -reyes suffix: REyes session folders are named <sample>-reyes
+         full_sample_name = $temp_name-reyes
+         Echo Slot $SlotNum: $temp_name (folder: $full_sample_name)
+         sample_names[$slotIndex] := $full_sample_name
+         base_names[$slotIndex] := $temp_name
+      Endif
+
+      SlotNum = $SlotNum + 1
+   EndLoop
+Endif
+
+#CONFIRMATION
+Echo
+Echo ============= CONFIRMATION =============
+Echo Base directory: $base_directory
+If $single_grid_mode == 1
+   Echo Acquisition mode: Single Grid (on stage)
+Else
+   Echo Acquisition mode: Multi-Grid (autoloader)
+   Echo Slots to process: $MinSlotNum to $MaxSlotNum ($ItrNum total)
+Endif
+If $workflow_type == 1
+   Echo Workflow: Automated
+Else
+   Echo Workflow: Manual
+Endif
+Echo Pipeline mode: $pipeline_name
+Echo Montage size: $mnt_size x $mnt_size
+If $pipeline_mode == 1 or $pipeline_mode == 2
+   Echo StepScan map size: $map_size x $map_size
+Endif
+If $pipeline_mode == 1
+   Echo Tilt range: +/- $selected_tilt degrees
+Endif
+Echo
+If $single_grid_mode == 1
+   Echo Sample folder name (with -reyes suffix):
+   Echo   $sample_names[1]
+Else
+   Echo Sample folder names (with -reyes suffix):
+   SlotNum = $MinSlotNum
+   Loop $ItrNum slotIndex
+      Echo   Slot $SlotNum: $sample_names[$slotIndex]
+      SlotNum = $SlotNum + 1
+   EndLoop
+Endif
+Echo =======================================
+
+YesNoBox Do you want to proceed with these settings?
+If $reportedValue1 == 0
+   Exit User cancelled the operation
+Endif
+
+# Start overall logging
+SetDirectory $base_directory
+If $single_grid_mode == 1
+   SaveLogOpenNew SingleGrid_$pipeline_name_$yyyymmdd
+Else
+   SaveLogOpenNew MultiGrid_$pipeline_name_$yyyymmdd
+Endif
+EndMacro
+
+Macro	5
+MacroName Slot_Verification_Helper
+
+# This helper verifies autoloader slots contain grids
+# Called only in multi-grid mode
+# Sets slot_status array for main script to use
+
+Echo
+Echo ============= STEP 1: SLOT VERIFICATION =============
+Echo Checking autoloader slots for grids...
+Echo
+
+SlotNum = $MinSlotNum
+missing_grids = 0
+NewArray slot_status 1 $ItrNum
+
+Loop $ItrNum slotIndex
+   current_sample = $sample_names[$slotIndex]
+
+   CompareNoCase current_sample SKIP
+   If $reportedValue1 == 0
+      Echo Slot $SlotNum: SKIP (user requested)
+      slot_status[$slotIndex] := 0
+      SlotNum = $SlotNum + 1
+      Continue
+   Endif
+
+   # Check if grid is present in slot
+   Echo Checking slot $SlotNum ($current_sample)...
+   ReportSlotStatus $SlotNum
+
+   If $reportedValue1 != 1
+      Echo   ERROR: No grid detected in slot $SlotNum!
+      slot_status[$slotIndex] := -1
+      missing_grids = $missing_grids + 1
+   Else
+      Echo   OK: Grid present in slot $SlotNum
+      slot_status[$slotIndex] := 1
+   Endif
+
+   SlotNum = $SlotNum + 1
+EndLoop
+
+Echo
+Echo Slot verification complete
+Echo Grids detected: $ItrNum - $missing_grids
+Echo Missing grids: $missing_grids
+
+# Handle missing grids with recheck option
+If $missing_grids > 0
+   Echo
+   Echo ================================================
+   Echo WARNING: MISSING GRIDS DETECTED
+   Echo ================================================
+   Echo The following slots are missing grids:
+   Echo
+   SlotNum = $MinSlotNum
+   Loop $ItrNum slotIndex
+      If $slot_status[$slotIndex] == -1
+         Echo   Slot $SlotNum: $sample_names[$slotIndex] - NO GRID FOUND
+      Endif
+      SlotNum = $SlotNum + 1
+   EndLoop
+   Echo
+   Echo ================================================
+   YesNoBox Load missing grids now? Click NO to abort, or YES to recheck slots.
+   If $reportedValue1 == 0
+      Exit User aborted - Missing grids in autoloader
+   Else
+      Echo
+      Echo Please load the missing grids into their slots
+      Echo Then click OK to verify all grids are present
+      Pause Load missing grids, then click OK to recheck
+
+      # Recheck all slots
+      Echo
+      Echo Rechecking all slots...
+      SlotNum = $MinSlotNum
+      missing_grids = 0
+
+      Loop $ItrNum slotIndex
+         current_sample = $sample_names[$slotIndex]
+
+         CompareNoCase current_sample SKIP
+         If $reportedValue1 == 0
+            SlotNum = $SlotNum + 1
+            Continue
+         Endif
+
+         If $slot_status[$slotIndex] == -1
+            Echo Rechecking slot $SlotNum ($current_sample)...
+            ReportSlotStatus $SlotNum
+
+            If $reportedValue1 != 1
+               Echo   STILL MISSING: No grid in slot $SlotNum!
+               missing_grids = $missing_grids + 1
+            Else
+               Echo   OK: Grid now present in slot $SlotNum
+               slot_status[$slotIndex] := 1
+            Endif
+         Endif
+
+         SlotNum = $SlotNum + 1
+      EndLoop
+
+      If $missing_grids > 0
+         Echo
+         Echo ERROR: $missing_grids grids still missing after recheck
+         Exit Cannot proceed - Missing grids in autoloader
+      Else
+         Echo
+         Echo SUCCESS: All grids are now present!
+      Endif
+   Endif
+Endif
+
+Echo
+Echo Slot verification complete
+EndMacro
+
+Macro	6
+MacroName Directory_Setup_Helper
+
+# This helper creates sample directories
+# For single-grid: creates one directory
+# For multi-grid: creates directories for all slots with verified grids
+
+Echo
+Echo ============= STEP 2: DIRECTORY SETUP =============
+
+If $single_grid_mode == 1
+   Echo Creating sample directory...
+   sample_dir_path = $base_directory\$sample_names[1]
+   Echo Creating directory: $sample_dir_path
+
+   Try
+      MakeDirectory $sample_dir_path
+      Echo   SUCCESS: Created $sample_dir_path
+   Catch
+      Echo   ERROR: Could not create directory $sample_dir_path
+      Exit Cannot proceed without sample directory
+   EndTry
+
+   # Create dummy slot_status array for compatibility with multi-grid code
+   NewArray slot_status 1 1
+   slot_status[1] := 1
+Else
+   Echo Creating sample directories for verified grids...
+
+   SlotNum = $MinSlotNum
+   setup_failures = 0
+
+   Loop $ItrNum slotIndex
+      current_sample = $sample_names[$slotIndex]
+
+      # Only create directories for slots with grids (status = 1)
+      If $slot_status[$slotIndex] != 1
+         Echo Slot $SlotNum: Skipping directory creation (no grid or skipped)
+         SlotNum = $SlotNum + 1
+         Continue
+      Endif
+
+      sample_dir_path = $base_directory\$current_sample
+      Echo Creating directory for slot $SlotNum: $sample_dir_path
+
+      Try
+         MakeDirectory $sample_dir_path
+         Echo   SUCCESS: Created $sample_dir_path
+      Catch
+         Echo   ERROR: Could not create directory $sample_dir_path
+         setup_failures = $setup_failures + 1
+         slot_status[$slotIndex] := -2
+      EndTry
+
+      SlotNum = $SlotNum + 1
+   EndLoop
+
+   Echo
+   Echo Directory setup complete
+
+   If $setup_failures > 0
+      Echo WARNING: $setup_failures directories could not be created
+      YesNoBox Continue anyway? (Failed samples will be skipped during acquisition)
+      If $reportedValue1 == 0
+         Exit User cancelled due to directory creation failures
+      Endif
+   Endif
+Endif
+EndMacro
+
+Macro	7
+MacroName Automated_Pipeline_Helper
+
+# This helper executes the automated pipeline
+# Supports FSD (mode 1), Screen (mode 2), and Montage-only (mode 3)
+# Called for each grid in the main loop
+
+Echo
+Echo ====== STARTING AUTOMATED PIPELINE FOR $current_sample ======
+
+If $pipeline_mode == 1
+   Echo Running FULL FSD Pipeline (7 steps total)
+   Echo This will take several hours per grid
+   total_steps := 7
+ElseIf $pipeline_mode == 2
+   Echo Running SCREEN Pipeline (5 steps total)
+   Echo This will take 1-3 hours per grid
+   total_steps := 5
+ElseIf $pipeline_mode == 3
+   Echo Running MONTAGE ONLY (1 step)
+   Echo This will take ~5-10 minutes per grid
+   total_steps := 1
+Endif
+
+# STEP 1: Montage (ALL modes)
+Echo [1/$total_steps] Starting grid montage acquisition...
+Call REyes_MNT
+Echo [1/$total_steps] Grid montage completed successfully
+
+# STEPS 2-5: Screening workflow (FSD and Screen modes only)
+If $pipeline_mode == 1 or $pipeline_mode == 2
+
+   # Step 2: Grid Square Finding
+   Echo [2/$total_steps] Finding grid squares in the montage...
+   Call ECNT_nav_ready
+   Echo [2/$total_steps] Grid squares found successfully
+
+   # Step 3: Eucentricity
+   Echo [3/$total_steps] Determining eucentricity for the grid...
+   Call REyes_ECNT
+   Echo [3/$total_steps] Eucentricity points determined successfully
+
+   # Step 4: Eucentricity Analysis
+   Echo [4/$total_steps] Processing eucentricity data...
+   Call ECNT_corrected
+   Call REyes_postECNT
+   Echo [4/$total_steps] Eucentric plane found successfully
+
+   # Step 5: StepScan
+   Echo [5/$total_steps] Performing StepScan...
+   Call REyes_STPSCN
+   Echo [5/$total_steps] All grid squares mapped
+
+Endif
+
+# STEPS 6-7: Targets and Movies (FSD mode only)
+If $pipeline_mode == 1
+   # Step 6: Wait for targets
+   Echo [6/7] Processing Diffraction Map...
+   Call Targets_nav_ready
+
+   # Check if targets were found (persistent variable set by Targets_nav_ready)
+   If $targets_found == 0
+      Echo
+      Echo Skipping movie collection for this grid
+      Echo
+      grid_results[$slotIndex] := PARTIAL
+      failure_reasons[$slotIndex] := No_targets_found
+      partial_completion := 1
+      Echo PARTIAL SUCCESS: $current_sample completed screening but no targets for movies
+
+      # Return early - main script will handle navigator closure and continue
+      Return
+   Endif
+
+   Echo [6/7] All targets identified successfully
+
+   # Step 7: Diffraction Movie
+   Echo [7/7] Collecting continuous rotation data...
+   Call REyes_DFMV
+   Echo [7/7] All movies collected
+
+   Echo ====== FSD PIPELINE COMPLETED FOR $current_sample ======
+ElseIf $pipeline_mode == 2
+   Echo ====== SCREEN PIPELINE COMPLETED FOR $current_sample ======
+ElseIf $pipeline_mode == 3
+   Echo ====== MONTAGE COMPLETED FOR $current_sample ======
+Endif
+EndMacro
+
+Macro	8
+MacroName Manual_Pipeline_Part1
+
+# PART 1 of Manual Pipeline (before Pause)
+# This executes montage acquisition only
+# Pause will happen in main script (outside Try block)
+# Then Part2 will be called to continue the pipeline
+
+Echo
+Echo ====== STARTING MANUAL PIPELINE FOR $current_sample ======
+
+If $pipeline_mode == 1
+   Echo Running MANUAL FSD Pipeline (7 steps total)
+   Echo This will take several hours
+   total_steps := 7
+ElseIf $pipeline_mode == 2
+   Echo Running MANUAL SCREEN Pipeline (5 steps total)
+   Echo This will take 1-3 hours
+   total_steps := 5
+Endif
+
+###########################################
+# PART 1: MONTAGE ACQUISITION
+###########################################
+
+Echo
+Echo ================================================
+Echo ===== PART 1: MONTAGE ACQUISITION =====
+Echo ================================================
+
+Echo [1/$total_steps] Starting grid montage acquisition...
+Call REyes_MNT
+Echo [1/$total_steps] Grid montage completed successfully
+
+# Return to main script for Pause (must be outside Try block)
+Echo
+Echo Montage complete - returning to main script for manual selection
+Echo
+EndMacro
+
+Macro	9
+MacroName Manual_Pipeline_Part2
+
+# PART 2 of Manual Pipeline (after Pause)
+# This continues the pipeline after user has manually selected grid squares
+# Assumes Pause has already happened in main script
+
+Echo
+Echo ================================================
+Echo ===== CONTINUING MANUAL PIPELINE AFTER PAUSE =====
+Echo ================================================
+Echo
+Echo NOTE: Ensure REyes is running in the sample directory:
+Echo   $base_directory\$current_sample
+Echo
+Echo REyes will process the manually selected grid squares.
+Echo
+
+###########################################
+# PART 2: MANUAL PIPELINE CONTINUATION
+###########################################
+
+Echo
+Echo ================================================
+Echo ===== PART 2: CONTINUING PIPELINE =====
+Echo ================================================
+
+# Step 2a: Save Manual Squares
+Echo [2/$total_steps] Saving manually added grid squares to navigator...
+Call REyes_saveNAV
+Call Manual_ready
+Echo [2/$total_steps] Navigator saved and selected squares are ready
+
+# Step 2b: Prepare Navigator for Eucentricity
+Echo Preparing navigator for eucentricity...
+Call REyes_premanualECNT
+Echo Navigator is ready for Eucentricity step
+
+# Step 2c: Process Manual Grid Squares
+Echo Processing manually selected grid squares...
+Call ECNT_nav_ready
+Echo Manual grid squares processed successfully
+
+# Step 3: Eucentricity
+Echo [3/$total_steps] Determining eucentricity for the grid...
+Call REyes_ECNT
+Echo [3/$total_steps] Eucentricity points determined successfully
+
+# Step 4: Eucentricity Analysis
+Echo [4/$total_steps] Processing eucentricity data...
+Call ECNT_corrected
+Call REyes_postECNT
+Echo [4/$total_steps] Eucentric plane found successfully
+
+# Step 5: StepScan
+Echo [5/$total_steps] Performing StepScan...
+Call REyes_STPSCN
+Echo [5/$total_steps] All grid squares mapped
+
+# STEPS 6-7: Targets and Movies (Manual FSD mode only)
+If $pipeline_mode == 1
+   # Step 6: Wait for targets
+   Echo [6/7] Processing Diffraction Map...
+   Call Targets_nav_ready
+
+   # Check if targets were found (persistent variable set by Targets_nav_ready)
+   If $targets_found == 0
+      Echo
+      Echo Skipping movie collection for this grid
+      Echo
+      grid_results[$slotIndex] := PARTIAL
+      failure_reasons[$slotIndex] := No_targets_found
+      partial_completion := 1
+      Echo PARTIAL SUCCESS: $current_sample completed screening but no targets for movies
+      Echo Status: PARTIAL - Screening completed but no targets for movies
+      Echo Steps completed: 1-5 (montage through StepScan)
+      Echo Steps skipped: 6-7 (target selection and movie collection)
+
+      # Return early - main script will handle navigator closure and continue
+      Return
+   Endif
+
+   Echo [6/7] All targets identified successfully
+
+   # Step 7: Diffraction Movie
+   Echo [7/7] Collecting continuous rotation data...
+   Call REyes_DFMV
+   Echo [7/7] All movies collected
+
+   Echo
+   Echo ================================================
+   Echo ===== MANUAL FSD PIPELINE COMPLETED =====
+   Echo ================================================
+ElseIf $pipeline_mode == 2
+   Echo
+   Echo ================================================
+   Echo ===== MANUAL SCREEN PIPELINE COMPLETED =====
+   Echo ================================================
+Endif
+EndMacro
+
+Macro	10
+MacroName REyes_Setup_Automated
+
+# This helper prompts user to start REyes instances
+# Required for automated FSD and Screen modes
+
+Echo
+Echo ================================================
+Echo ============= IMPORTANT: REYES SETUP ===========
+Echo ================================================
+Echo
+Echo CRITICAL STEP - READ CAREFULLY:
+Echo
+Echo 1. You must now start a SEPARATE REyes Python instance
+Echo    in EACH sample directory that was just created.
+Echo
+Echo 2. Directory created:
+Echo
+If $single_grid_mode == 1
+   Echo    - $base_directory\$sample_names[1]
+Else
+   SlotNum = $MinSlotNum
+   Loop $ItrNum slotIndex
+      current_sample = $sample_names[$slotIndex]
+      If $slot_status[$slotIndex] == 1
+         Echo    - $base_directory\$current_sample
+      Endif
+      SlotNum = $SlotNum + 1
+   EndLoop
+Endif
+Echo
+Echo 3. Each REyes instance must be configured to monitor
+Echo    its respective sample directory.
+Echo
+Echo 4. Do NOT proceed until ALL REyes instances are
+Echo    running and ready to process data.
+Echo
+Echo 5. Verify each REyes instance is actively monitoring
+Echo    by checking for startup messages in each terminal.
+Echo
+Echo ================================================
+
+YesNoBox Have you started REyes in ALL sample folders and confirmed they are running?
+If $reportedValue1 == 0
+   Echo
+   Echo User indicated REyes is NOT ready
+   Echo ABORTING: Please start all REyes instances and run the script again
+   Echo No data has been acquired - you can safely restart
+   Exit User aborted - REyes instances not ready
+Endif
+
+Echo
+Echo User confirmed ALL REyes instances are running
+If $single_grid_mode == 0
+   Echo Proceeding with multi-grid acquisition...
+Else
+   Echo Proceeding with acquisition...
+Endif
+EndMacro
+
+Macro	11
+MacroName REyes_Setup_Optional
+
+# This helper for Montage-only mode where REyes is optional
+
+Echo
+Echo ================================================
+Echo Montage-only mode selected - REyes NOT required
+Echo Proceeding directly to acquisition...
+Echo ================================================
+EndMacro
+
+Macro	13
+ScriptName BatchED_Rotation_CETA
+
+# Continuous rotation diffraction acquisition for CETA-M camera
+# Called by BatchED_Main_CETA with persistent variables:
+#   $compoundname, $xtalct, $nitems, $acqrate, $binning,
+#   $startangle, $finalangle, $tiltrange, $range, $rotrate, $rotincr, $recordtime,
+#   $nsweeps, $spsz, $cetadist, $temp, $set_directory
+#
+# KEY DIFFERENCES FROM APOLLO VERSION:
+# - Uses frame-by-frame saving with Save command (not SetFolderForFrames)
+# - Opens MRC file directly in movies subdirectory
+# - No post-acquisition frame copying from detector
+# - Uses 840 mm -> 790 mm CETA calibrated distance (not apollodist)
+
+# Open column valve, unblank beam, raise screen
+SetColumnOrGunValve 1
+SetBeamBlank 0
+ScreenUp
+
+# Set camera parameters for continuous rotation
+SetContinuous R 1
+SetExposure R $acqrate
+SetBinning R $binning
+
+# Calculate number of frames needed
+# Formula: nframes = tiltrange / (rotrate * acqrate)
+# Example: 100 deg / (0.3 * 3) = 111.11 -> 112 frames
+nframes = $tiltrange / ($rotrate * $acqrate)
+Echo Calculated frames to save: $nframes
+Echo (Based on rotation rate $rotrate dps, frame time $acqrate s)
+
+# Get CETA camera length (calibrated)
+ReportCameraLength
+dist := $reportedValue1 * 1000
+Echo Talos camera length: $dist mm
+
+# CETA camera length calibration: 840 mm -> 790 mm
+If $dist == 840
+   cetadist := 790
+ElseIf $dist == 960
+   cetadist := 960
+Else
+   Echo Warning: Unusual camera length detected
+   cetadist := $dist
+Endif
+Echo CETA calibrated camera length: $cetadist mm
+
+# Create movies directory and get timestamp
+MakeDirectory movies
+ReportDateTime
+yyyymmdd := $reportedValue1
+movnum = 20000
+
+# Main acquisition loop
+Loop $nitems
+   xtalct := $xtalct + 1
+   sweepcount = 0
+
+   Echo
+   Echo ================================================
+   Echo Processing target: $xtalct
+   Echo ================================================
+
+   Loop $nsweeps
+      sweepcount = $sweepcount + 1
+      movnum = $movnum + 1
+
+      # Create folder name for movie files
+      # Format: compoundname-movN_XXXmm_X.Xdps_X.Xspf_PXXtoNXXX_spXXg8_sweepN_c
+      # Note: g8 is hardcoded (gun lens position 8 - no SerialEM command to report this)
+      movdir = $compoundname-mov$xtalct_$cetadistmm_$rotratedps_$acqratespf_$range_sp$spszg8_sweep$sweepcount_$temp
+      MakeDirectory movies\$movdir
+
+      # Create movie filename
+      movname = $compoundname-mov$xtalct_$cetadist_$rotrate_$acqrate_$range_g8sp$spsz_$temp.mrc
+
+      Echo Sweep $sweepcount of $nsweeps for target $xtalct
+      Echo Movie folder: $movdir
+      Echo Movie name: $movname
+
+      # Move to target
+      MoveToNavItem $xtalct
+      Delay 1 sec
+
+      # Overshoot tilt by 3 degrees, then settle to start angle
+      TiltTo $startangle + 3
+      TiltTo $startangle
+      Delay 2 sec
+
+      ReportTiltAngle
+      Echo Starting tilt angle: $reportedValue1
+
+      # Go to Record area
+      GoToLowDoseArea R
+
+      # Enable continuous frames
+      UseContinuousFrames 1
+
+      # Report stage position before tilt
+      ReportStageXYZ
+      Echo Stage position before tilt: X=$reportedValue1 Y=$reportedValue2 Z=$reportedValue3
+
+      # Open file for movie
+      OpenNewFile movies\$movdir\$yyyymmdd_$movnum_integrated_movie.mrc
+      ReportCurrentFilename
+
+      Echo STARTING TILT
+      ReportClock
+
+      # Acquire first frame
+      Record
+
+      # Wait for first frame and save
+      StartFrameWaitTimer -1
+      WaitForNextFrame
+      Save
+
+      # Start background tilt
+      BackgroundTilt $finalangle $rotincr
+
+      # Save remaining frames
+      Loop $nframes
+         StartFrameWaitTimer -1
+         WaitForNextFrame
+         Save
+      EndLoop
+
+      # Stop continuous acquisition
+      StopContinuous
+      CloseFile
+
+      Echo END TILT
+      Echo Movie folder: $movdir
+      Echo Acquired movie: $movname
+      ReportClock
+
+      # Report final stage position
+      ReportStageXYZ
+      Echo Stage position after tilt: X=$reportedValue1 Y=$reportedValue2 Z=$reportedValue3
+
+      # Return to zero tilt
+      TiltTo 0
+      ReportTiltAngle
+      Echo Returned to tilt: $reportedValue1
+
+      Echo Completed sweep $sweepcount for target $xtalct
+      Echo
+
+      Delay 5 sec
+
+   EndLoop
+
+   Echo Completed all sweeps for target $xtalct
+   Echo
+
+EndLoop
+EndMacro
+
+Macro	14
+ScriptName BatchED_Still_CETA
+
+# Still diffraction snapshot acquisition for CETA-M camera
+# Called by BatchED_Main_CETA with persistent variables:
+#   $compoundname, $xtalct, $nitems, $acqrate, $binning,
+#   $nsweeps, $spsz, $cetadist, $temp, $set_directory
+
+# Open column valve, unblank beam, raise screen
+SetColumnOrGunValve 1
+SetBeamBlank 0
+ScreenUp
+
+# Set camera parameters for still snapshots
+SetContinuous R 0
+SetExposure R $acqrate
+SetBinning R $binning
+
+# Get timestamp for file naming
+ReportDateTime
+yyyymmdd := $reportedValue1
+snapnum = 30000
+
+# Main acquisition loop
+Loop $nitems
+   xtalct := $xtalct + 1
+   sweepcount = 0
+
+   Echo
+   Echo ================================================
+   Echo Processing target: $xtalct
+   Echo ================================================
+
+   Loop $nsweeps
+      sweepcount = $sweepcount + 1
+      snapnum = $snapnum + 1
+
+      # Move to target
+      MoveToNavItem $xtalct
+      Delay 1 sec
+
+      # Go to Record area
+      GoToLowDoseArea R
+
+      # Report current stage angle for folder naming
+      ReportTiltAngle
+      currentangle = $reportedValue1
+      Echo Current tilt angle: $currentangle
+
+      # Create folder name for frames
+      # Format: samplename-movN_XXXmm_X.Xspf_spXX_angle_sweepN_c
+      movdir = $compoundname-mov$xtalct_$cetadistmm_$acqratespf_sp$spsz_$currentangle_sweep$sweepcount_$temp
+      MakeDirectory snapshots\$movdir
+
+      Echo Sweep $sweepcount of $nsweeps for target $xtalct
+      Echo Frame folder: $movdir
+
+      # Report stage position
+      ReportStageXYZ
+      Echo Stage position: X=$reportedValue1 Y=$reportedValue2 Z=$reportedValue3
+
+      Echo ACQUIRING SNAPSHOT
+      ReportClock
+
+      # Open file and acquire still snapshot
+      OpenNewFile snapshots\$movdir\$yyyymmdd_$snapnum_snapshot.mrc
+      ReportCurrentFilename
+      Record
+      Save
+      CloseFile
+
+      Echo Frame folder: $movdir
+      ReportClock
+
+      Echo Completed sweep $sweepcount for target $xtalct
+      Echo
+
+      Delay 2 sec
+
+   EndLoop
+
+   Echo Completed all sweeps for target $xtalct
+   Echo
+
+EndLoop
+EndMacro
+
+Macro	15
+ScriptName BatchED_MultiAngle_CETA
+
+# Multi-angle still diffraction snapshot acquisition for CETA-M camera
+# Collects 5 still snapshots at +60, +30, 0, -30, -60 degrees per target
+# Called by BatchED_Main_CETA with persistent variables:
+#   $compoundname, $xtalct, $nitems, $acqrate, $binning,
+#   $nsweeps, $spsz, $cetadist, $temp, $set_directory
+
+# Define tilt angles
+angles = {60 30 0 -30 -60}
+angleslabel = P60P30Z0N30N60
+
+# Open column valve, unblank beam, raise screen
+SetColumnOrGunValve 1
+SetBeamBlank 0
+ScreenUp
+
+# Set camera parameters for still snapshots
+SetContinuous R 0
+SetExposure R $acqrate
+SetBinning R $binning
+
+# Get timestamp for file naming
+ReportDateTime
+yyyymmdd := $reportedValue1
+snapnum = 30000
+
+# Main acquisition loop
+Loop $nitems
+   xtalct := $xtalct + 1
+   sweepcount = 0
+
+   Echo
+   Echo ================================================
+   Echo Processing target: $xtalct
+   Echo ================================================
+
+   Loop $nsweeps
+      sweepcount = $sweepcount + 1
+      snapnum = $snapnum + 1
+
+      # Move to target
+      MoveToNavItem $xtalct
+      Delay 1 sec
+
+      # Go to Record area
+      GoToLowDoseArea R
+
+      # Create folder name for frames
+      # Format: samplename-movN_XXXmm_X.Xspf_spXX_P60P30Z0N30N60_sweepN_c
+      movdir = $compoundname-mov$xtalct_$cetadistmm_$acqratespf_sp$spsz_$angleslabel_sweep$sweepcount_$temp
+      MakeDirectory snapshots\$movdir
+
+      Echo Sweep $sweepcount of $nsweeps for target $xtalct
+      Echo Frame folder: $movdir
+      Echo Collecting 5 angles: +60, +30, 0, -30, -60 degrees
+
+      # Report stage position
+      ReportStageXYZ
+      Echo Stage position: X=$reportedValue1 Y=$reportedValue2 Z=$reportedValue3
+
+      # Open single MRC file for all angles
+      OpenNewFile snapshots\$movdir\$yyyymmdd_$snapnum_multiangle.mrc
+      ReportCurrentFilename
+
+      # Collect snapshot at each angle
+      Loop 5 idx
+         tiltangle = $angles[$idx]
+
+         Echo Tilting to $tiltangle degrees...
+         TiltTo $tiltangle
+         Delay 2 sec
+
+         ReportTiltAngle
+         Echo Acquiring snapshot at tilt angle: $reportedValue1
+         ReportClock
+
+         Record
+         Save
+
+         Echo Snapshot $idx of 5 complete (angle: $tiltangle)
+      EndLoop
+
+      CloseFile
+
+      Echo Frame folder: $movdir
+      ReportClock
+
+      # Return to zero tilt
+      TiltTo 0
+      ReportTiltAngle
+      Echo Returned to tilt: $reportedValue1
+
+      Echo Completed sweep $sweepcount for target $xtalct
+      Echo
+
+      Delay 5 sec
+
+   EndLoop
+
+   Echo Completed all sweeps for target $xtalct
+   Echo
+
+EndLoop
+EndMacro
+
+Macro	16
+ScriptName BatchED_Imaging_CETA
+
+# Still imaging snapshot acquisition (Search mode) for CETA-M camera
+# Called by BatchED_Main_CETA with persistent variables:
+#   $compoundname, $xtalct, $nitems, $acqrate, $binning, $set_directory
+
+# Open column valve, unblank beam, raise screen
+SetColumnOrGunValve 1
+SetBeamBlank 0
+ScreenUp
+
+# Set camera parameters for Search snapshots
+SetContinuous S 0
+SetExposure S $acqrate
+SetBinning S $binning
+
+# Get timestamp for file naming
+ReportDateTime
+yyyymmdd := $reportedValue1
+imgnum = 40000
+
+# Main acquisition loop
+Loop $nitems
+   xtalct := $xtalct + 1
+   imgnum = $imgnum + 1
+
+   Echo
+   Echo ================================================
+   Echo Processing target: $xtalct
+   Echo ================================================
+
+   # Move to target
+   MoveToNavItem $xtalct
+   Delay 1 sec
+
+   # Create folder name for frames
+   searchdir = $compoundname_item$xtalct
+   MakeDirectory imaging\$searchdir
+
+   Echo Frame folder: $searchdir
+
+   # Go to Search area
+   GoToLowDoseArea S
+
+   # Report stage position
+   ReportStageXYZ
+   Echo Stage position: X=$reportedValue1 Y=$reportedValue2 Z=$reportedValue3
+
+   Echo ACQUIRING SEARCH IMAGE
+   ReportClock
+
+   # Open file and acquire Search image
+   OpenNewFile imaging\$searchdir\$yyyymmdd_$imgnum_search.mrc
+   ReportCurrentFilename
+   Search
+   Save
+   CloseFile
+
+   Echo Frame folder: $searchdir
+   ReportClock
+
+   Echo Completed target: $xtalct
+   Echo
+
+   Delay 2 sec
+
+EndLoop
+EndMacro
+
+Macro	19
+MacroName AutoloaderScreen
+
+########## SETTINGS ##########
+
+MinSlotNum    := 3
+MaxSlotNum  := 6
+
+########## END SETTINGS ##########
+
+ItrNum := $MaxSlotNum - $MinSlotNum + 1
+SlotNum = $MinSlotNum
+
+Loop $ItrNum
+
+   ReportSlotStatus $SlotNum
+   If $reportedValue1 == 1
+
+      SetColumnOrGunValve 0
+      LoadCartridge $SlotNum
+      SetColumnOrGunValve 1
+      TiltTo 0
+      MoveStageTo 0 0 20
+      M
+      NewMap
+
+   ElseIf $SlotNum == $MinSlotNum
+
+      SetColumnOrGunValve 1
+      TiltTo 0
+      MoveStageTo 0 0 20
+      M
+      NewMap
+
+   Endif
+
+   SlotNum = $SlotNum + 1
+
+EndLoop
+
+SetColumnOrGunValve 0
+EndMacro
+
+Macro	30
+MacroName REyes_MNT
+
+################BEFORE STARTING###############
+#  TURN OFF LOW DOSE ON SCOPE
+#  TURN ON LOW DOSE IN SERIALEM
+#  LOAD VIEW PARAMETERS
+#  CHECK SPOT SIZE
+###################SETTINGS###################
+
+
+
+##############LOCATIONS AND NAMES#############
+
+#EXTENSIONS
+mrc_ext =  .mrc
+nav_ext = .nav
+log_ext = .log
+mdoc_ext = .mdoc
+
+#FILE NAMES
+#FOR MNT SCRIPT
+montage = _210LM_$mnt_sizex$mnt_size
+navigator = _nav
+
+log_file_name = $samplename$montage$log_ext
+nav_file_name := $samplename$montage$navigator$nav_ext
+mnt_file_name = $samplename$montage$mrc_ext
+mdoc_file_name = $mnt_file_name$mdoc_ext
+
+
+
+##################INITIATION##################
+
+#START LOGGING
+
+DoesFileExist $log_file_name
+log_file_exists = $reportedValue1
+
+If $log_file_exists == 0
+   SaveLogOpenNew $samplename$montage
+
+ElseIf $log_file_exists == 1
+   Echo Log file with this name already exists and will be saved with an increment index
+   SaveLogOpenNew $samplename$montage
+
+Endif
+
+Echo Chosen directory: $set_directory
+Echo Sample name: $samplename
+Echo Montage size: $mnt_size
+
+#OPEN NAVIGATOR
+
+DoesFileExist $nav_file_name
+nav_file_exists = $reportedValue1
+
+ReportIfNavOpen
+nav_file_open = $reportedValue1
+
+If $nav_file_exists == 0 and $nav_file_open == 0
+   OpenNavigator $samplename$montage$navigator$nav_ext
+
+ElseIf $nav_file_exists == 1 and $nav_file_open == 0
+   ReadNavFile $nav_file_name
+
+ElseIf $nav_file_exists == 0 and $nav_file_open == 1
+   SaveNavigator $samplename$montage$navigator$nav_ext
+
+Endif
+
+# SET FILE TYPE TO MRC
+
+SetNewFileType 0
+
+
+
+########TAKE INITIAL MONTAGE AT 210 LM########
+
+DoesFileExist $mnt_file_name
+If $reportedValue1 == 0
+
+   # ADJUST EUCENTRICITY
+
+   SetColumnOrGunValve 1
+   ScreenUp
+   SetBeamBlank 0
+
+   Eucentricity 1
+   ReportStageXYZ
+   z_value_rough = $reportedValue3
+
+   SetLowDoseMode 1
+   OpenNewMontage $mnt_size $mnt_size $mnt_file_name
+
+   Echo Starting 210x LM montage collection
+   ReportDateTime
+   ReportNumMontagePieces
+
+   # FULL MONTAGE SETTINGS AND ACQUISITION
+
+   SetColumnOrGunValve 1
+   TiltTo 0
+   MoveStageTo 0 0 $z_value_rough
+
+   Delay 1 sec
+
+   SetContinuous M 0
+   SetExposure M 3
+   SetBinning M 2
+
+   M
+   NewMap
+
+   ScreenDown
+
+   SetBeamBlank 1
+   SetColumnOrGunValve 0
+
+   Echo Completed 210x LM montage data collection
+   ReportDateTime
+
+ElseIf $reportedValue1 == 1
+   Echo You have already acquired grid montage
+
+Endif
+
+# CHECK THAT MDOC FILE WAS SAVED
+
+DoesFileExist $mdoc_file_name
+mdoc_file_exists = $reportedValue1
+
+If $mdoc_file_exists == 0
+   Echo .mdoc file for montage was not found. Please check settings.
+ElseIf $mdoc_file_exists == 1
+   Echo .mdoc file for montage has been saved successfully.
+Endif
+
+SaveNavigator
+SaveLog
+EndMacro
+
+Macro	31
+MacroName REyes_ECNT
+
+################BEFORE STARTING###############
+#  CHECK THAT FINE EUCENTRIC WILL RUN IN VIEW
+#  TURN ON LOW DOSE IN SERIALEM
+#  grid_squares\eucentricity.nav IS WRITTEN BY REYES
+#  RUN FROM START_REYES OR AFTER REYES_Setup_Standalone
+###################SETTINGS###################
+
+
+
+##############LOCATIONS AND NAMES#############
+
+#EXTENSIONS
+mrc_ext =  .mrc
+nav_ext = .nav
+log_ext = .log
+mdoc_ext = .mdoc
+
+#FILE NAMES
+#FOR ECNT SCRIPT
+sqrs = _grid_squares
+sqrs_file_name = grid_squares\eucentricity$nav_ext
+
+log_sqrs_file_name = $samplename$sqrs$log_ext
+
+
+##################INITIATION##################
+
+#START LOGGING
+
+DoesFileExist $log_sqrs_file_name
+log_file_exists = $reportedValue1
+
+If $log_file_exists == 0
+   SaveLogOpenNew $samplename$sqrs
+
+ElseIf $log_file_exists == 1
+   Echo Log file with this name already exists and will be saved with an increment index
+   SaveLogOpenNew $samplename$sqrs
+
+Endif
+
+Echo Chosen directory: $set_directory
+Echo Current sample: $samplename
+
+ReportIfNavOpen
+nav_file_open = $reportedValue1
+
+If $nav_file_open == 0
+   Exit Could not locate Navigator.
+
+Endif
+
+#MERGE GRID SQUARES TO NAVIGATOR
+
+DoesFileExist $sqrs_file_name
+sqrs_file_exists = $reportedValue1
+
+If $sqrs_file_exists == 1
+   MergeNavFile $sqrs_file_name
+
+ElseIf $sqrs_file_exists == 0
+   Exit $sqrs_file_name was not found
+
+Endif
+
+ReportNumTableItems
+
+Echo $reportedValue1
+
+nitems := $reportedValue1 - 1
+
+Echo Current number of items: $nitems
+
+posoffset = 0
+posct = $posoffset + 1
+
+Echo Current position: $posct
+
+
+
+#########RUN FINE EUCENTRICITY IN VIEW########
+
+SetColumnOrGunValve 1
+SetBeamBlank 0
+ScreenUp
+
+Loop $nitems
+
+   posct = $posct + 1
+
+   MoveToNavItem $posct
+
+   Echo Moved to Navigator item $posct
+
+   Delay 1 sec
+
+   SetContinuous V 0
+   SetExposure V 1.5
+   SetBinning V 2
+
+
+   Eucentricity 3
+
+   UpdateItemZ $posct
+
+   ReportStageXYZ
+
+EndLoop
+
+Echo STOPPING
+
+ReportClock
+
+Echo Completed fine eucentricity for all grid squares
+
+ReportDateTime
+
+ScreenDown
+SetBeamBlank 1
+SetColumnOrGunValve 0
+
+SaveNavigator
+SaveLog
+EndMacro
+
+Macro	32
+MacroName REyes_STPSCN
+
+################BEFORE STARTING###############
+#  TURN ON LOW DOSE IN SERIALEM
+#  RECORD: DIFFRACTION UNDER PARALLEL BEAM CONDITION
+#  NAVIGATOR: MONTAGE MAP FOLLOWED BY GRID SQUARES
+#  RUN FROM START_REYES OR AFTER REYES_Setup_Standalone
+###################SETTINGS###################
+
+
+
+##############LOCATIONS AND NAMES#############
+
+#EXTENSIONS
+mrc_ext =  .mrc
+nav_ext = .nav
+log_ext = .log
+mdoc_ext = .mdoc
+
+#FILE NAMES
+#FOR STPSCN SCRIPT
+stpscn = _stepscan
+
+log_stpscn_file_name = $samplename$stpscn$log_ext
+
+
+##################INITIATION##################
+
+#START LOGGING
+
+DoesFileExist $log_stpscn_file_name
+log_file_exists = $reportedValue1
+
+If $log_file_exists == 0
+   SaveLogOpenNew $samplename$stpscn
+
+ElseIf $log_file_exists == 1
+   Echo Log file with this name already exists and will be saved with an increment index
+   SaveLogOpenNew $samplename$stpscn
+
+Endif
+
+Echo Chosen directory: $set_directory
+Echo Current sample: $samplename
+
+ReportIfNavOpen
+nav_file_open = $reportedValue1
+
+If $nav_file_open == 0
+   Exit Could not locate Navigator.
+
+Endif
+
+ReportNumTableItems
+nitems := $reportedValue1 - 1
+Echo Current number of items: $nitems
+
+#SET POSITIONS OFFSET TO SKIP MONTAGE POSITIONS '1'
+posoffset = 1
+posct = $posoffset
+Echo Current position: $posct
+
+
+
+###############STEPSCAN SETTINGS##############
+
+#GRID SETTINGS
+imgnum = 10000
+
+offset_x = 0
+offset_y = 0
+
+increment_x = 5 # microns
+increment_y = 5 # microns
+
+num_loopsx = $map_size # steps in x
+num_loopsy =  $map_size # steps in y
+
+half_loopsx = nearint ( $num_loopsx / 2)
+half_loopsy = nearint ( $num_loopsy / 2 )
+
+x_travel =  $num_loopsx * ( 0 - $increment_x)
+y_travel = $num_loopsy * ( 0 - $increment_y)
+
+
+############RUN STEPSCAN IN RECORD############
+
+SetColumnOrGunValve 1
+SetBeamBlank 0
+ScreenUp
+
+GoToLowDoseArea R
+
+SetContinuous R 0
+SetExposure R 1
+SetBinning R 2
+
+
+Loop $nitems
+
+   posname = $posct
+
+   SaveLogOpenNew $samplename_$posname
+   #SetFolderForFrames $samplename_$posname
+   MakeDirectory $samplename_$posname
+
+   posct = $posct + 1
+   MoveToNavItem $posct
+
+   ReportStageXYZ
+
+   Delay 1 sec
+
+   x_temp = $offset_x - ( $half_loopsx * $increment_x )
+   y_temp = $offset_y - ( $half_loopsy * $increment_y )
+
+   MoveStage $x_temp $y_temp
+
+   Loop $num_loopsy
+
+      Delay 1 sec
+
+      Loop $num_loopsx
+
+         imgnum = $imgnum + 1
+         MoveStage $increment_x 0
+
+         Delay 1 sec
+
+         OpenNewFile $samplename_$posname\$yyyymmdd_$imgnum_integrated_movie$mrc_ext
+         ReportCurrentFilename
+         Record
+         Save
+         CloseFile
+
+         ReportStageXYZ
+
+      EndLoop
+
+      MoveStage (-1 * $num_loopsx * $increment_x ) $increment_y
+      ReportClock
+
+   EndLoop
+
+
+
+
+
+
+   Echo Completed StepScan for current grid square
+   SaveLog
+
+EndLoop
+
+Echo STOPPING
+
+ReportClock
+
+Echo Completed StepScan for all grid squares
+
+ReportDateTime
+
+ScreenDown
+SetBeamBlank 1
+SetColumnOrGunValve 0
+
+SaveNavigator
+SaveLog
+EndMacro
+
+Macro	33
+MacroName REyes_DFMV
+
+################BEFORE STARTING###############
+#  TURN ON LOW DOSE IN SERIALEM
+#  RECORD: DIFFRACTION UNDER PARALLEL BEAM CONDITION
+#  targets\targets.nav IS WRITTEN BY REYES
+#  RUN FROM START_REYES OR AFTER REYES_Setup_Standalone
+###################SETTINGS###################
+
+
+
+##############LOCATIONS AND NAMES#############
+
+#EXTENSIONS
+mrc_ext =  .mrc
+nav_ext = .nav
+log_ext = .log
+mdoc_ext = .mdoc
+
+#FILE NAMES
+#ADDITIONS FOR DFMV SCRIPT
+
+trgts = _targets
+targets_file_name = targets\targets$nav_ext
+log_dfmv_file_name = $samplename$trgts$log_ext
+
+
+##################INITIATION##################
+
+#START LOGGING
+
+DoesFileExist $log_dfmv_file_name
+log_file_exists = $reportedValue1
+
+If $log_file_exists == 0
+   SaveLogOpenNew $samplename$trgts
+
+ElseIf $log_file_exists == 1
+   Echo Log file with this name already exists and will be saved with an increment index
+   SaveLogOpenNew $samplename$trgts
+
+Endif
+
+Echo Chosen directory: $set_directory
+Echo Current sample: $samplename
+
+ReportIfNavOpen
+nav_file_open = $reportedValue1
+
+If $nav_file_open == 0
+   Exit Could not locate Navigator.
+
+Endif
+
+#CHECK NUMBER OF GRID SQUARES IN NAVIGATOR
+
+ReportNumTableItems
+
+nsqrs = $reportedValue1
+
+Echo Current number of items: $nsqrs
+
+DoesFileExist $targets_file_name
+targets_file_exists = $reportedValue1
+
+If $targets_file_exists == 1
+   MergeNavFile $targets_file_name
+
+ElseIf $targets_file_exists == 0
+   Exit $targets_file_name was not found
+
+Endif
+
+ReportNumTableItems
+
+all_items = $reportedValue1
+
+Echo Total number of items with targets: $all_items
+
+nitems := $all_items - $nsqrs
+
+Echo Current number of crystal targets: $nitems
+
+offset = $nsqrs
+
+Echo Offset: $offset
+
+xtalct := $offset
+
+
+##############DIFF MOVIE SETTINGS#############
+
+#ROTATION SETTINGS
+startangle := $selected_tilt
+finalangle := -$selected_tilt
+range := P$startangletoN$finalangle
+tiltrange := $selected_tilt * 2
+nsweeps := 1
+ReportSpotSize
+spsz := $reportedValue1
+rotrate := 0.3
+rotincr := 0.004 #calibrated for Ceta frame saving at 0.3 dps; nominal is 0.033 * $rotrate (0.033=1dps, 0.066=2dps)
+acqrate := 0.33
+ReportCameraLength
+dist := $reportedValue1 * 1000
+temp := c #c for cryo or rt for room temp
+
+
+
+
+
+
+
+
+Echo Talos camera length is $dist
+
+
+
+############RUN STEPSCAN IN RECORD############
+
+SetColumnOrGunValve 1
+SetBeamBlank 0
+ScreenUp
+
+SetContinuous R 1
+SetExposure R 3
+SetBinning R 2
+
+
+ReportExposure R
+expsr = $reportedValue1
+
+movtime = ($startangle - $finalangle) / $rotrate
+nframes = ($startangle - $finalangle) / ($rotrate * $expsr)
+
+MakeDirectory movies
+movnum = 20000
+Delay 2 sec
+
+Loop $nitems
+   movnum = $movnum + 1
+   xtalct := $xtalct + 1
+   sweepcnt = 1
+   movdir = $samplename_$distmm_sp$spsz_$rotratedps_$acqratefps_$range_mov$xtalct_sweep$sweepcnt_$temp
+   MakeDirectory movies\$movdir
+   #SetFolderForFrames $movdir
+   movname = $samplename-mov$xtalct_$dist_$rotrate_$expsr_$range_g8sp$spsz_$temp$mrc_ext
+   MoveToNavItem $xtalct
+
+   Loop $nsweeps
+      sweepcnt = $sweepcnt + 1
+      TiltTo $startangle
+      Delay 1 sec
+      ReportTiltAngle
+      GoToLowDoseArea R
+      UseContinuousFrames 1
+
+
+
+      OpenNewFile movies\$movdir\$yyyymmdd_$movnum_integrated_movie$mrc_ext
+      ReportCurrentFilename
+      Record
+      StartFrameWaitTimer -1
+      WaitForNextFrame
+      Save
+      echo STARTING TILT
+      BackgroundTilt $finalangle $rotincr
+
+      Loop $nframes
+         
+         StartFrameWaitTimer -1
+         WaitForNextFrame
+         Save
+         
+      EndLoop
+      
+      StopContinuous
+      CloseFile
+
+      echo END TILT
+      echo Movie folder: $movdir
+      echo Acquired movie: $movname
+      Delay 120 sec
+      TiltTo 0
+      ReportClock
+      ReportStageXYZ
+      Delay 2 sec
+
+
+
+
+
+      
+      Echo Completed movie acquisition
+      SaveLog
+   EndLoop
+   
+   SaveLog
+EndLoop
+
+Echo STOPPING
+
+Delay 900 sec
+ReportClock
+
+Echo Completed acquiring tilt movies for all crystals!
+
+ReportDateTime
+
+ScreenDown
+SetBeamBlank 1
+SetColumnOrGunValve 0
+
+SaveNavigator
+SaveLog
+EndMacro
+
+Macro	40
+MacroName REyes_postECNT
+
+###################SETTINGS###################
+
+#UPDATE NAVIGATOR ITEMS WITH ALL GRID SQUARES
+ReportNumTableItems
+Echo Number of Navigator lines: $reportedValue1
+
+nitems := $reportedValue1 - 1
+Echo Current number of items: $nitems
+
+Loop $nitems
+
+   DeleteNavigatorItem -1
+
+EndLoop
+
+all_squares = $set_directory\grid_squares\grid_squares.nav
+Echo Eucentricity corrected file: $all_squares
+MergeNavFile $all_squares
+
+SaveLog
+EndMacro
+
+Macro	41
+MacroName REyes_premanualECNT
+
+###################SETTINGS###################
+
+#REMOVE MANUALLY ADDED SQUARES GRID SQUARES
+ReportNumTableItems
+Echo Number of Navigator lines: $reportedValue1
+
+nitems := $reportedValue1 - 1
+Echo Current number of items: $nitems
+
+Loop $nitems
+
+   DeleteNavigatorItem -1
+
+EndLoop
+
+SaveLog
+EndMacro
+
+Macro	42
+MacroName REyes_saveNAV
+
+Echo $nav_file_name
+SaveNavigator $nav_file_name
+SaveLog
+EndMacro
+
+Macro	43
+MacroName ECNT_nav_ready
+Loop 20
+   DoesFileExist grid_squares\eucentricity.nav
+   nav_file_exists = $reportedValue1
+
+   If $nav_file_exists == 0
+      Delay 30 sec
+   ElseIf $nav_file_exists == 1
+      Delay 5 sec
+      Break
+   EndIf
+
+EndLoop
+
+If $nav_file_exists == 0
+   Exit REyes got stuck and Navigator file was not generated. Please, check REyes log.
+EndIf
+EndMacro
+
+Macro	44
+MacroName ECNT_corrected
+Loop 5
+   DoesFileExist grid_squares\eucentricity_correction.png
+   correction_file_exists = $reportedValue1
+
+   If $correction_file_exists == 0
+      Delay 30 sec
+   ElseIf $correction_file_exists == 1
+      Delay 15 sec
+      Break
+   EndIf
+
+EndLoop
+
+If $correction_file_exists == 0
+   Exit REyes got stuck and eucentricity was not corrected. Please, check REyes log.
+EndIf
+EndMacro
+
+Macro	45
+MacroName Targets_nav_ready
+Loop 50
+   DoesFileExist targets\targets.nav
+   nav_file_exists = $reportedValue1
+
+   If $nav_file_exists == 0
+      Delay 30 sec
+   ElseIf $nav_file_exists == 1
+      Delay 5 sec
+      Break
+   EndIf
+
+EndLoop
+
+# Set persistent variable for caller to check
+If $nav_file_exists == 0
+   Echo WARNING: targets.nav file was not generated after 25 minutes
+   Echo This usually means no viable targets were identified
+   targets_found := 0
+Else
+   targets_found := 1
+EndIf
+EndMacro
+
+Macro	46
+MacroName Manual_ready
+Loop 20
+   DoesFileExist grid_squares\manual_grid_overlay.png
+   manual_file_exists = $reportedValue1
+
+   If $manual_file_exists == 0
+      Delay 30 sec
+   ElseIf $manual_file_exists == 1
+      Delay 5 sec
+      Break
+   EndIf
+
+EndLoop
+
+If $manual_file_exists == 0
+   Exit REyes got stuck and list of squares has not been updated. Please, check REyes log.
+EndIf
+EndMacro

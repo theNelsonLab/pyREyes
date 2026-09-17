@@ -1,4 +1,4 @@
-# Diffraction Map Processing Pipeline (REyes v3.4)
+# Diffraction Map Processing Pipeline (REyes v3.4.10)
 [![License](https://img.shields.io/badge/License-Academic_Use_Only-blue.svg)](LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.16971798.svg)](https://doi.org/10.5281/zenodo.16971798)
 
@@ -8,7 +8,10 @@
 pip install .
 
 # Run automated pipeline
-reyes-monitor --microscope Arctica-CETA --autoprocess
+reyes-monitor --microscope Arctica-CETA
+
+# Run automated pipeline with movie processing (requires a pyautoprocess preset)
+reyes-monitor --microscope Arctica-CETA --autoprocess --microscope-config Arctica-CETA-mrc-SM
 ```
 
 ## Overview
@@ -21,10 +24,13 @@ pyREyes is a Python package to support REyes (Reciprocal Eyes), an end-to-end au
 - Manual or automated grid square selection
 - Eucentricity correction
 - Diffraction pattern quality classification using DQI (Diffraction Quality Index)
+- Frame loading for different detectors: stacks are summed, large frames are cleaned of bad lines and binned to 2048x2048, and small frames use dedicated detection parameters
+- Diffraction map blocks recorded across midnight are processed as one block
 - Navigation file generation with spatial awareness
 - Comprehensive visualization suite
 - Automated data processing with state machine monitoring
 - Optional movie processing and structure solution integration
+- Restart-safe movie processing and timeouts for hung processing steps
 
 ## Diffraction Quality Analysis
 

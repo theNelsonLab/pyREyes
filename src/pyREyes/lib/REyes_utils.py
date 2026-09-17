@@ -11,6 +11,8 @@ def find_mrc_and_mdoc_files() -> Tuple[Optional[Path], Optional[Path]]:
     current_dir = Path.cwd()
     
     for mrc_file in current_dir.glob("*.mrc"):
+        if mrc_file.name.startswith("._"):
+            continue
         mdoc_file = Path(f"{mrc_file}.mdoc")
         if mdoc_file.exists():
             return mrc_file, mdoc_file

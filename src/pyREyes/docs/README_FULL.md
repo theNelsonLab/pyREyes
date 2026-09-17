@@ -1,7 +1,7 @@
 # REyes (Reciprocal Eyes)
 ## End-to-End Autonomous Electron Diffraction
 
-**pyREyes v3.4** - Automated MicroED diffraction data collection and analysis package
+**pyREyes v3.4.10** - Automated MicroED diffraction data collection and analysis package
 
 This repository contains a series of scripts designed to process diffraction data, generate heatmaps, identify key targets, and manage navigation files for SerialEM. The scripts are structured to be executed in the order outlined below, ensuring that new blocks of data are processed systematically while maintaining data integrity.
 
@@ -17,6 +17,7 @@ Ensure you have the following Python packages installed:
 - `scikit-learn`
 - `shapely`
 - `psutil`
+- `mrcfile`
 
 You can install the package with pip after downloading the code:
 ```bash
@@ -172,12 +173,12 @@ This script processes blocks of diffraction images, classifies their quality bas
   - Fourier Transform peaks maps
   - Quality classification maps with color coding
 - **Block Data**:
-  - `reyes.json`: File indicating processed state of each block
+  - `reyes.json`: Block metadata, written only for completely processed blocks (index range, name pattern and a `files` list of every file in acquisition order)
 - **Log File**: Detailed processing log in `REyes_logs/dmp_processing.log`
 
 #### Key Processing Steps:
-1. **Block Discovery**: Identifies folders containing diffraction data and determines file ranges
-2. **Image Processing**: Automatic resizing to 2048×2048, Gaussian filtering, binary image creation
+1. **Block Discovery**: Identifies folders containing diffraction data and orders files by index, so blocks recorded across midnight are processed as one block; incomplete blocks are skipped with a warning
+2. **Image Processing**: Stacks are summed; frames larger than 2048×2048 have bad lines removed and are binned to 2048×2048; smaller frames use dedicated detection parameters; Gaussian filtering and binary image creation
 3. **Quality Classification**: Five-category system with primary spot detection and secondary Fourier Transform analysis
 4. **Data Organization**: Coordinates extraction, DataFrame construction, and top target selection
 
@@ -192,6 +193,7 @@ Options:
 - `--skip-processed`: Skip previously processed blocks
 - `--proc-blocks N`: Limit processing to N blocks
 - `--folder`: Process specific folder only
+- `--legacy-parse`: Load frames exactly as REyes 3.4.0 and earlier did, to reproduce old results
 
 Example:
 ```bash
@@ -351,7 +353,8 @@ Options:
 - `--top-target-per-category`: Targets per category (category mode, default: 2)
 - `--top-target-per-block`: Targets per block (block mode)
 - `--tolerance`: Minimum distance between targets in microns (default: 10.1)
-- `--input-files`: Custom input navigation files
+- `--input-files`: Custom input navigation files (category-based selection)
+- `--target-lists`: Target lists for block-based selection: `sum`, `peaks`, `dqi`; 1-3 values (default: all three). Applies only with `--top-target-per-block`
 
 Example:
 ```bash
@@ -456,14 +459,46 @@ Options:
 - `--manual-squares`: Enable manual grid squares selection mode
 - `--starting-state`: Begin monitoring from a specific state
 - `--current-block`: Set current diffraction map block number (default: 1)
+- `--camera-length`: Override camera length in mm (default: from microscope configuration)
+- `--top-target-per-category`: Top targets per category, used by `create-final-targets-4` (default: 2)
+- `--top-target-per-block`: Top targets per block; enables block-based selection in `create-final-targets-4`
+- `--target-lists`: Target lists for block-based selection: `sum` (intensity), `peaks` (diffraction peaks), `dqi` (quality); 1-3 values. Applies only with `--top-target-per-block`; category-based selection always uses the nxds, quality, spots and sum navigation files (default: all three)
 - `--stepscan-only`: Skip movie collection and processing
-- `--autoprocess`: Enable automatic movie processing
+- `--montage-only`: Process only the initial montage and grid squares, then exit
+- `--subprocess-timeout`: Seconds before a processing subprocess is treated as hung and killed (default: 1800)
+- `--autosolve-timeout`: Seconds before AutoSolve is killed (default: no limit)
+- `--autoprocess`: Enable automatic movie processing (requires `--microscope-config`)
 - `--autosolve`: Enable automatic structure solution (requires AutoSolve to be separately installed)
+
+AutoProcess options (passed to `autoprocess`):
+- `--microscope-config`: Microscope configuration preset (required with `--autoprocess`)
+- `--config-file`: Path to microscope configuration file (default: microscope_configs.json)
+- `--rotation-axis`, `--frame-size`, `--signal-pixel`, `--min-pixel`, `--background-pixel`, `--pixel-size`, `--wavelength`, `--beam-center-x`, `--beam-center-y`, `--file-extension`, `--detector-distance`, `--exposure`, `--rotation`: Override the corresponding preset values
+- `--pointless`: Run pointless for space group analysis
+- `--parallel`: Use parallel XDS (xds_par) instead of serial XDS
+- `--dqa`: Enable diffraction quality analysis and frame selection
+- `--verbose`: Enable verbose logging for detailed conversion validation
+- `--res-range`: Manual resolution range in Angstroms (overrides calculated values)
+- `--friedel`: Set Friedel's law for XDS (true or false, default: true)
+
+AutoSolve options (passed to `autosolve`):
+- `--shelx`: Which SHELX programs to run: t=SHELXT only, d=SHELXD only, td=both (default: td)
+- `--ntryt`: Number of trials for initial SHELXD screening (default: 1000)
+- `--ntryf`: Number of trials for final SHELXD runs (default: 10000)
+- `--space-group`: Target specific space group (1-230) or by name without spaces (e.g. P212121)
+- `--atoms`: Comma-separated list of atoms for SFAC (default: C,H,N,O,S)
+- `--type`: Type of compound (organic or inorganic)
+- `--composition`: Chemical formula (overrides `--atoms`), e.g. CaTiO3
 
 Example:
 ```bash
-reyes-monitor --microscope Arctica-CETA --filtering 9 --autoprocess --autosolve
+reyes-monitor --microscope Arctica-CETA --filtering 9 --autoprocess --microscope-config Arctica-CETA-mrc-SM --autosolve
 ```
+
+Movie processing:
+- With `--autoprocess`, the monitor writes `autoprocess_done.flag` in a movie folder once autoprocess succeeds. A restarted monitor skips movies that have this flag (without `--autoprocess`, movies that were already renamed) and still counts them in the totals
+- An autoprocess run that exits with a non-zero code is reported as a failure; a movie is marked as done (`autoprocess_done.flag`) only after a successful run
+- A processing step that exceeds `--subprocess-timeout` is killed together with its child processes and handled like a failed step
 
 #### Output:
 - **Logs**: `REyes_logs/REyes_monitor.log`
@@ -517,6 +552,6 @@ The pipeline provides systematic processing of diffraction data while maintainin
 
 ## Support and Documentation
 
-- **Homepage**: https://github.com/theNelsonLab/REyes
-- **Issues**: https://github.com/theNelsonLab/REyes/issues
-- **Documentation**: https://github.com/theNelsonLab/REyes/tree/main/src/pyREyes/docs
+- **Homepage**: https://github.com/theNelsonLab/pyREyes
+- **Issues**: https://github.com/theNelsonLab/pyREyes/issues
+- **Documentation**: https://github.com/theNelsonLab/pyREyes/tree/main/src/pyREyes/docs

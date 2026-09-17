@@ -12,7 +12,8 @@ import re
 import sys
 import uuid
 import json
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -24,55 +25,297 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, median_filter
 from skimage.measure import label, regionprops_table
 
 from pyREyes.lib.ui.REyes_ui import print_banner
 from pyREyes.lib.REyes_logging import setup_logging, log_print
 from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs, MicroscopeConfig
 
-__version__ = '3.4.0'
+__version__ = '3.4.10'
 __min_required_version__ = '3.4.0'
 
 # Configuration Constants
 MICROSCOPE_CONFIGS = load_microscope_configs()
 
+# Detection parameters in the microscope configs are tuned for 2048x2048 frames.
+# Larger frames are binned down to this size before detection.
+TARGET_FRAME_SIZE = 2048
+
+# Detection parameters for frames smaller than TARGET_FRAME_SIZE, keyed by frame
+# size. A frame uses the entry of the largest key not exceeding its size; frames
+# smaller than every key use the smallest entry.
+SMALL_FRAME_PARAMS = {
+    1024: {'light_sigma_prim': 1.0, 'harsh_sigma_prim': 3,
+           'threshold_std_prim': 6, 'min_pixels_prim': 3},
+    512: {'light_sigma_prim': 1.0, 'harsh_sigma_prim': 3,
+          'threshold_std_prim': 6, 'min_pixels_prim': 3},
+}
+
+# Bad line (hot/dead column or row) removal, applied only to frames larger than
+# TARGET_FRAME_SIZE before binning. Each line is split into segments; a line is
+# bad when enough segments deviate from the neighbouring lines in the same
+# direction. Real diffraction spots only raise one or two segments of a line.
+BAD_LINE_SEGMENTS = 16          # segments per line
+BAD_LINE_WINDOW = 15            # neighbouring lines used as local reference
+BAD_LINE_Z = 5.0                # per-segment deviation threshold (robust sigma)
+BAD_LINE_MIN_SEGMENTS = 6       # deviating segments needed to flag a line
+BAD_LINE_MAX_WIDTH = 3          # wider runs are image structure, not defects
+BAD_LINE_MAX_FRACTION = 0.01    # more flagged lines than this -> do not clean
+BORDER_FRACTION = 0.03          # border blanked during detection
+
+
+def _border_width(length: int) -> int:
+    """Width of the blanked border for an image dimension."""
+    return max(1, int(length * BORDER_FRACTION))
+
+
+def _read_mrc(mrc_file: str) -> np.ndarray:
+    """Read MRC data with HyperSpy, falling back to mrcfile if HyperSpy fails."""
+    try:
+        return np.asarray(hs.load(mrc_file).data)
+    except Exception as hs_error:
+        try:
+            import mrcfile
+        except ImportError:
+            raise hs_error
+        log_print(f"HyperSpy could not read {Path(mrc_file).name} ({hs_error}); "
+                  f"retrying with mrcfile", logging.WARNING)
+        with mrcfile.open(mrc_file, mode='r', permissive=True) as mrc:
+            if mrc.data is None:
+                raise ValueError(f"No image data in {mrc_file}")
+            return np.array(mrc.data)
+
+
+def _frame_axis(shape: Tuple[int, int, int]) -> int:
+    """Axis holding the frames of a 3D stack: the one not matching the image axes."""
+    if shape[1] == shape[2] or shape[0] not in (shape[1], shape[2]):
+        return 0
+    return 2 if shape[0] == shape[1] else 1
+
+
+def _line_runs(indices: np.ndarray) -> List[Tuple[int, int]]:
+    """Group sorted indices into (start, end) runs of consecutive values."""
+    runs = []
+    for i in indices:
+        if runs and i == runs[-1][1] + 1:
+            runs[-1] = (runs[-1][0], int(i))
+        else:
+            runs.append((int(i), int(i)))
+    return runs
+
+
+def find_bad_lines(data: np.ndarray, axis: int) -> List[Tuple[int, int]]:
+    """
+    Find narrow bad lines in a 2D frame.
+
+    Args:
+        data: 2D frame
+        axis: 0 for rows, 1 for columns
+
+    Returns:
+        List of (start, end) runs of bad lines, excluding the blanked border
+    """
+    lines = data if axis == 0 else data.T
+    n_lines, length = lines.shape
+    usable = (length // BAD_LINE_SEGMENTS) * BAD_LINE_SEGMENTS
+    if n_lines < BAD_LINE_WINDOW or usable == 0:
+        return []
+
+    segments = lines[:, :usable].reshape(n_lines, BAD_LINE_SEGMENTS, -1).mean(axis=2, dtype=np.float64)
+    residual = segments - median_filter(segments, size=(BAD_LINE_WINDOW, 1), mode='nearest')
+    sigma = np.median(np.abs(residual - np.median(residual, axis=0)), axis=0) * 1.4826
+    sigma = np.where(sigma > 0, sigma, np.inf)
+    z = residual / sigma
+
+    bad = ((z > BAD_LINE_Z).sum(axis=1) >= BAD_LINE_MIN_SEGMENTS) | \
+          ((z < -BAD_LINE_Z).sum(axis=1) >= BAD_LINE_MIN_SEGMENTS)
+    border = _border_width(n_lines)
+    bad[:border] = False
+    bad[-border:] = False
+
+    return [run for run in _line_runs(np.flatnonzero(bad))
+            if run[1] - run[0] < BAD_LINE_MAX_WIDTH]
+
+
+def remove_bad_lines(data: np.ndarray) -> Tuple[np.ndarray, Dict[str, List[Tuple[int, int]]]]:
+    """
+    Replace narrow bad columns and rows with the mean of their neighbours.
+
+    Args:
+        data: 2D float frame (modified in place)
+
+    Returns:
+        The cleaned frame and the runs replaced per axis ('rows', 'columns')
+    """
+    replaced = {}
+    for axis, name in ((1, 'columns'), (0, 'rows')):
+        runs = find_bad_lines(data, axis)
+        n_bad = sum(end - start + 1 for start, end in runs)
+        if n_bad > BAD_LINE_MAX_FRACTION * data.shape[1 - axis]:
+            log_print(f"Warning: {n_bad} bad {name} detected, more than "
+                      f"{BAD_LINE_MAX_FRACTION:.0%} of the frame; not cleaning {name}",
+                      logging.WARNING)
+            continue
+        for start, end in runs:
+            before = max(start - 1, 0)
+            after = min(end + 1, data.shape[1 - axis] - 1)
+            if axis == 1:
+                data[:, start:end + 1] = ((data[:, before] + data[:, after]) / 2)[:, None]
+            else:
+                data[start:end + 1, :] = ((data[before, :] + data[after, :]) / 2)[None, :]
+        if runs:
+            replaced[name] = runs
+    return data, replaced
+
+
+def bin_to_target(data: np.ndarray, target: int = TARGET_FRAME_SIZE) -> Tuple[np.ndarray, int]:
+    """
+    Mean-bin a 2D frame by one integer factor so that it fits within target.
+
+    The frame is cropped symmetrically to a multiple of the factor, keeping the
+    beam centre in place.
+
+    Returns:
+        The binned frame and the binning factor
+    """
+    factor = int(np.ceil(max(data.shape) / target))
+    if factor <= 1:
+        return data, 1
+    height = (data.shape[0] // factor) * factor
+    width = (data.shape[1] // factor) * factor
+    top = (data.shape[0] - height) // 2
+    left = (data.shape[1] - width) // 2
+    data = data[top:top + height, left:left + width]
+    binned = data.reshape(height // factor, factor, width // factor, factor).mean(axis=(1, 3))
+    return binned.astype(data.dtype, copy=False), factor
+
+
+def load_diffraction_frame(mrc_file: str) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """
+    Load an MRC file as one 2D frame ready for diffraction analysis.
+
+    - Stacks of frames are summed
+    - int16 frames up to TARGET_FRAME_SIZE are returned unchanged; everything
+      else is converted to float32
+    - NaN and inf values are replaced with 0
+    - Frames larger than TARGET_FRAME_SIZE have bad lines removed and are
+      mean-binned by one integer factor
+
+    Args:
+        mrc_file: Path to the MRC file
+
+    Returns:
+        The frame and a dict describing what was done (shape, dtype, frames,
+        binning, non_finite, bad_lines)
+    """
+    raw = np.squeeze(_read_mrc(mrc_file))
+    info = {'shape': raw.shape, 'dtype': str(raw.dtype), 'frames': 1,
+            'binning': 1, 'non_finite': 0, 'bad_lines': {}}
+
+    if raw.dtype.kind not in 'uif':
+        raise ValueError(f"Unsupported MRC data type {raw.dtype}")
+
+    if raw.ndim == 3:
+        axis = _frame_axis(raw.shape)
+        info['frames'] = raw.shape[axis]
+        # Accumulate in float64 so long stacks of bright frames stay exact
+        data = np.moveaxis(raw, axis, 0).sum(axis=0, dtype=np.float64)
+    elif raw.ndim == 2:
+        data = raw
+    else:
+        raise ValueError(f"Unsupported MRC shape {raw.shape}")
+
+    oversized = max(data.shape) > TARGET_FRAME_SIZE
+    if not (data.dtype == np.int16 and not oversized):
+        data = data.astype(np.float32)
+
+    if data.dtype.kind == 'f':
+        non_finite = ~np.isfinite(data)
+        info['non_finite'] = int(non_finite.sum())
+        if info['non_finite']:
+            data[non_finite] = 0
+
+    if oversized:
+        data, info['bad_lines'] = remove_bad_lines(data)
+        data, info['binning'] = bin_to_target(data)
+
+    return data, info
+
+
 class ImageProcessor:
     """Handles core image processing operations for diffraction pattern analysis."""
     
-    def __init__(self, config: MicroscopeConfig):
+    def __init__(self, config: MicroscopeConfig, legacy_parse: bool = False):
         """
         Initialize ImageProcessor with microscope configuration.
         
         Args:
             config: MicroscopeConfig object containing processing parameters
+            legacy_parse: Load frames exactly as REyes 3.4.0 and earlier did,
+                with configuration detection parameters for every frame size
         """
         self.config = config
+        self.legacy_parse = legacy_parse
         self._conversion_logged = False  # Track if uint16 conversion message was already logged
-        
+        self._logged_messages = set()
+
+    def reset_block_log(self) -> None:
+        """Allow once-per-block messages to be logged again for a new block."""
+        self._logged_messages.clear()
+
+    def _log_once(self, message: str, level: int = logging.INFO) -> None:
+        """Log a message once per block."""
+        if message not in self._logged_messages:
+            self._logged_messages.add(message)
+            log_print(message, level)
+
     def parse_mrc(self, mrc_file: str) -> np.ndarray:
         """
-        Loads and processes an MRC file to ensure optimal image dimensions.
+        Loads an MRC file as a single 2D frame for diffraction analysis.
         
         Args:
             mrc_file: Path to the MRC file
             
         Returns:
             Processed image data as numpy array
-            
+
         Notes:
-            - Target size is 2048x2048
-            - Smaller images are processed with warning
-            - Larger images are downsampled using mean binning
-            - Converts uint16/uint8 data to float64 to prevent overflow
+            See load_diffraction_frame. With legacy_parse the loading of
+            REyes 3.4.0 and earlier is used instead.
         """
+        if self.legacy_parse:
+            return self._parse_mrc_legacy(mrc_file)
+
+        data, info = load_diffraction_frame(mrc_file)
+        name = Path(mrc_file).name
+
+        description = f"{info['shape']} {info['dtype']}"
+        if info['frames'] > 1:
+            description += f", {info['frames']} frames summed"
+        if info['binning'] > 1:
+            description += f", binned x{info['binning']}"
+        self._log_once(f"Frames loaded as {description} -> {data.shape}")
+
+        if info['non_finite']:
+            log_print(f"Warning: {name} contains {info['non_finite']} NaN/inf pixels, set to 0",
+                      logging.WARNING)
+        for axis_name, runs in info['bad_lines'].items():
+            log_print(f"Removed bad {axis_name} {runs} (unbinned coordinates) in {name}")
+        if max(data.shape) < TARGET_FRAME_SIZE:
+            params = self.detection_params(data.shape)
+            self._log_once(f"Frame smaller than {TARGET_FRAME_SIZE}x{TARGET_FRAME_SIZE}; "
+                           f"using small-frame detection parameters {params}")
+        return data
+
+    def _parse_mrc_legacy(self, mrc_file: str) -> np.ndarray:
+        """Loads an MRC file exactly as REyes 3.4.0 and earlier did."""
         # Load the MRC file
         signal = hs.load(mrc_file)
         data = signal.data
         
-        # CRITICAL FIX: Convert unsigned integer data to float64 early to prevent overflow
-        # This is especially important for uint16 MRC files which can cause overflow
-        # during arithmetic operations later in the pipeline
+        # Convert unsigned integer data to float64 early: uint16 MRC data would
+        # otherwise overflow in later arithmetic
         if data.dtype in [np.uint8, np.uint16, np.uint32]:
             if not self._conversion_logged:
                 log_print(f"Converting {data.dtype} data to float64 to prevent overflow (this message will only appear once)")
@@ -102,12 +345,31 @@ class ImageProcessor:
             
             return data
 
+    def detection_params(self, shape: Tuple[int, ...]) -> Dict[str, float]:
+        """
+        Primary detection parameters for a frame of the given shape.
+
+        Frames of TARGET_FRAME_SIZE use the microscope configuration; smaller
+        frames use SMALL_FRAME_PARAMS (unless legacy_parse is set).
+        """
+        size = max(shape)
+        if self.legacy_parse or size >= TARGET_FRAME_SIZE:
+            return {
+                'light_sigma_prim': self.config.light_sigma_prim,
+                'harsh_sigma_prim': self.config.harsh_sigma_prim,
+                'threshold_std_prim': self.config.threshold_std_prim,
+                'min_pixels_prim': self.config.min_pixels_prim,
+            }
+        fitting = [key for key in SMALL_FRAME_PARAMS if key <= size]
+        key = max(fitting) if fitting else min(SMALL_FRAME_PARAMS)
+        return SMALL_FRAME_PARAMS[key]
+
     def create_binary_image(self, 
                         data: np.ndarray, 
                         ft_done: bool = False) -> np.ndarray:
         """Generates a binary image using Gaussian blurs and thresholding."""
-        # CRITICAL FIX: Convert uint16 to float64 to prevent overflow
-        # This prevents integer overflow when subtracting Gaussian filtered images
+        # Convert unsigned integers to float64 so that subtracting the Gaussian
+        # filtered images cannot overflow
         if data.dtype in [np.uint8, np.uint16, np.uint32]:
             data = data.astype(np.float64)
         
@@ -117,16 +379,17 @@ class ImageProcessor:
             difference_data = data - harsh_blur_data
             threshold_value = np.mean(difference_data) + (3 * np.std(difference_data))
         else:
-            light_blur_data = gaussian_filter(data, sigma=self.config.light_sigma_prim)
-            harsh_blur_data = gaussian_filter(data, sigma=self.config.harsh_sigma_prim)
+            params = self.detection_params(data.shape)
+            light_blur_data = gaussian_filter(data, sigma=params['light_sigma_prim'])
+            harsh_blur_data = gaussian_filter(data, sigma=params['harsh_sigma_prim'])
             difference_data = light_blur_data - harsh_blur_data
-            threshold_value = np.mean(difference_data) + (self.config.threshold_std_prim * np.std(difference_data))
+            threshold_value = np.mean(difference_data) + (params['threshold_std_prim'] * np.std(difference_data))
 
         binary_image = difference_data > threshold_value
 
         # Mask 3% on all four sides
-        mask_size_x = int(binary_image.shape[1] * 0.03)
-        mask_size_y = int(binary_image.shape[0] * 0.03)
+        mask_size_x = _border_width(binary_image.shape[1])
+        mask_size_y = _border_width(binary_image.shape[0])
         
         binary_image[:, :mask_size_x] = False
         binary_image[:, -mask_size_x:] = False
@@ -156,8 +419,8 @@ class ImageProcessor:
         """Identifies and filters centroids in a binary image."""
         labeled_array = label(binary_image)
         
-        # Use min_pixels=1 for FT patterns, config value otherwise
-        min_pixels = 1 if ft_done else self.config.min_pixels_prim
+        # Use min_pixels=1 for FT patterns, detection parameters otherwise
+        min_pixels = 1 if ft_done else self.detection_params(binary_image.shape)['min_pixels_prim']
         
         properties = regionprops_table(labeled_array, properties=('centroid', 'area'))
         centroids = [(x, y) for x, y, area in 
@@ -574,10 +837,18 @@ class DataVisualizer:
 @dataclass
 class FileIndices:
     """Container for file indexing information."""
-    date_code: str
+    date_code: str  # Date code of the first file; a block may span several dates
     min_index: int
     max_index: int
     total_files: int
+    file_suffix: str = '_integrated_movie.mrc'  # Default suffix, can be '_0_movie.mrc'
+    index_width: int = 5  # Zero-padding width of the index, detected from filenames
+    files: List[str] = field(default_factory=list)  # File names in acquisition order
+
+# Diffraction image names: YYYYMMDD_<index>_integrated_movie.mrc or YYYYMMDD_<index>_0_movie.mrc.
+# The date comes from the acquisition computer and changes at midnight; the index
+# keeps counting across the date change.
+MOVIE_FILE_PATTERN = re.compile(r"^(\d{8})_(\d+)(_integrated_movie\.mrc|_0_movie\.mrc)$")
 
 @dataclass
 class ProcessingStatus:
@@ -617,76 +888,137 @@ class FileHandler:
 
     def create_reyes_json(self, folder_path: str, indices: FileIndices) -> None:
         """Create a Reyes.json file in the specified folder.
-        
+
         Args:
             folder_path: Path to the folder where the JSON file should be created
             indices: FileIndices object containing date and index information
+
+        Notes:
+            'format' expands min_id..max_id into file names for blocks recorded on a
+            single date. 'files' lists every file of the block in acquisition order
+            and is also correct for blocks recorded across midnight.
         """
         try:
             json_data = {
                 'version': 1,
                 'min_id': indices.min_index,
                 'max_id': indices.max_index,
-                'format': f'{indices.date_code}_%d_integrated_movie.mrc',
-                'uid': self._generate_block_uid()
+                'format': f'{indices.date_code}_%0{indices.index_width}d{indices.file_suffix}',
+                'uid': self._generate_block_uid(),
+                'files': indices.files
             }
-            
+
             json_path = Path(folder_path) / 'reyes.json'
             with json_path.open('w') as f:
-                import json
                 json.dump(json_data, f, indent=4)
-                
+
             log_print(f"Created Reyes.json file in {folder_path}")
-            
+
         except Exception as e:
             log_print(f"Error creating Reyes.json file: {str(e)}", logging.ERROR)
     
     def determine_indices(self, folder_path: str) -> Optional[FileIndices]:
         """
-        Determine common date code and index range from MRC filenames.
-        
+        Determine the files of a block and their index range from MRC filenames.
+
         Args:
             folder_path: Path to folder containing MRC files
-            
+
         Returns:
-            FileIndices object containing date and index information, or None if no valid files found
-            
+            FileIndices object for the block, or None if the folder holds no valid,
+            unambiguous block
+
         Note:
-            Expects filenames in format "YYYYMMDD_XXXXX_integrated_movie.mrc"
+            Expects filenames in format "YYYYMMDD_XXXXX_integrated_movie.mrc" or "YYYYMMDD_XXXXX_0_movie.mrc".
+            The index may be zero-padded or not and may outgrow its padding
+            (e.g. "20250101_107458_0_movie.mrc"). Files are ordered by index, so a
+            block recorded across midnight keeps all its files. If the folder holds
+            a repeated acquisition (a complete block followed, after a large index
+            gap, by another complete block), the latest acquisition is used.
         """
         try:
             folder = Path(folder_path)
             if not folder.exists():
                 return None
 
-            pattern = re.compile(r"(\d{8})_(\d{5})_integrated_movie\.mrc")
-            indices = []
-            date_code = None
-
+            files_by_suffix: Dict[str, List[Tuple[int, str, str, int]]] = {}
             for file in folder.glob("*.mrc"):
-                match = pattern.match(file.name)
+                match = MOVIE_FILE_PATTERN.match(file.name)
                 if match:
-                    current_date = match.group(1)
-                    if date_code is None:
-                        date_code = current_date
-                    elif date_code != current_date:
-                        log_print(f"Warning: Multiple date codes found in {folder_path}", 
-                                logging.WARNING)
-                    indices.append(int(match.group(2)))
+                    date_code, index, suffix = match.groups()
+                    files_by_suffix.setdefault(suffix, []).append(
+                        (int(index), date_code, file.name, len(index)))
 
-            if indices:
-                return FileIndices(
-                    date_code=date_code,
-                    min_index=min(indices),
-                    max_index=max(indices),
-                    total_files=len(indices)
-                )
-            return None
+            if not files_by_suffix:
+                return None
+
+            suffix = max(files_by_suffix, key=lambda s: len(files_by_suffix[s]))
+            for other, other_files in files_by_suffix.items():
+                if other != suffix:
+                    log_print(f"Warning: Ignoring {len(other_files)} '*{other}' files in {folder.name}; "
+                              f"the block uses '*{suffix}' files", logging.WARNING)
+
+            files = sorted(files_by_suffix[suffix])
+            runs = self._consecutive_runs(files)
+            selected = runs[-1]
+
+            if len(runs) > 1:
+                previous = runs[-2]
+                gap = selected[0][0] - previous[-1][0] - 1
+                side = int(np.sqrt(len(selected)))
+                is_repeat = (side * side == len(selected)
+                             and gap >= len(selected)
+                             and all(len(run) <= len(selected) for run in runs[:-1]))
+                if not is_repeat:
+                    present = {entry[0] for entry in files}
+                    missing = sorted(set(range(files[0][0], files[-1][0] + 1)) - present)
+                    index_counts = Counter(entry[0] for entry in files)
+                    duplicates = sorted(index for index, count in index_counts.items() if count > 1)
+                    details = []
+                    if missing:
+                        shown = ', '.join(str(i) for i in missing[:10])
+                        details.append(f"{len(missing)} missing indices ({shown}{', ...' if len(missing) > 10 else ''})")
+                    if duplicates:
+                        details.append(f"duplicate indices {duplicates[:10]}")
+                    log_print(f"Warning: Skipping block {folder.name}: file indices are not one continuous "
+                              f"acquisition: {'; '.join(details)}", logging.WARNING)
+                    return None
+                ignored = sum(len(run) for run in runs[:-1])
+                log_print(f"Warning: {folder.name} holds a repeated acquisition; using the latest "
+                          f"{len(selected)} files ({selected[0][2]} .. {selected[-1][2]}) and ignoring "
+                          f"{ignored} earlier files", logging.WARNING)
+
+            dates = sorted({entry[1] for entry in selected})
+            if len(dates) > 1:
+                log_print(f"Block {folder.name} spans dates {', '.join(dates)}")
+
+            # The padding width is the shortest index seen: longer indices are
+            # numbers that simply outgrew the padding, not a wider padding.
+            return FileIndices(
+                date_code=selected[0][1],
+                min_index=selected[0][0],
+                max_index=selected[-1][0],
+                total_files=len(selected),
+                file_suffix=suffix,
+                index_width=min(entry[3] for entry in selected),
+                files=[entry[2] for entry in selected]
+            )
 
         except Exception as e:
-            log_print(f"Error determining indices in {folder_path}: {str(e)}", 
+            log_print(f"Error determining indices in {folder_path}: {str(e)}",
                      logging.ERROR)
             return None
+
+    @staticmethod
+    def _consecutive_runs(files: List[Tuple[int, str, str, int]]) -> List[List[Tuple[int, str, str, int]]]:
+        """Split index-sorted files into runs of consecutive indices."""
+        runs: List[List[Tuple[int, str, str, int]]] = []
+        for entry in files:
+            if runs and entry[0] == runs[-1][-1][0] + 1:
+                runs[-1].append(entry)
+            else:
+                runs.append([entry])
+        return runs
 
     def get_coordinates_for_file(self, 
                                log_file_path: str, 
@@ -938,6 +1270,13 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        '--legacy-parse',
+        action='store_true',
+        help='Load frames exactly as REyes 3.4.0 and earlier did (no stack summing, bad line '
+             'removal or small-frame detection parameters), to reproduce old results'
+    )
+
+    parser.add_argument(
         '--proc-blocks',
         type=int,
         help='Limit the number of blocks to process',
@@ -993,10 +1332,12 @@ def main() -> int:
 
         log_print(f"\nREyes DMP v{__version__} will process diffraction map blocks\n")
         log_print(f"Using {args.microscope} microscope configuration")
+        if args.legacy_parse:
+            log_print("Using legacy frame loading (REyes 3.4.0 and earlier)")
 
         # Initialize configuration and processors
         config = MICROSCOPE_CONFIGS[args.microscope]
-        image_processor = ImageProcessor(config)
+        image_processor = ImageProcessor(config, legacy_parse=args.legacy_parse)
         diffraction_analyzer = DiffractionAnalyzer(config, image_processor)
         data_visualizer = DataVisualizer('dif_maps/diff_blocks_maps')
         file_handler = FileHandler(os.getcwd(), config)
@@ -1034,15 +1375,13 @@ def main() -> int:
                 log_print(f"Processing unprocessed folder: {folder_name}")
 
             log_print(f"Processing folder: {folder_name}")
+            image_processor.reset_block_log()
             
-            # Determine file indices
+            # Determine the files of the block
             indices = file_handler.determine_indices(folder)
             if indices is None:
-                log_print(f"No valid .mrc files found in {folder_name}. Skipping.")
+                log_print(f"No valid block of .mrc files found in {folder_name}. Skipping.")
                 continue
-
-            # Create Reyes.json file for a data block
-            file_handler.create_reyes_json(folder, indices)
 
             # Initialize data collection
             csv_data = []
@@ -1057,21 +1396,15 @@ def main() -> int:
             if not log_file:
                 log_print(f"No SerialEM log file found for {folder_name}. Proceeding without coordinates.", logging.WARNING)
 
-            # Process each file in the folder
-            filenames = [
-                f"{indices.date_code}_{str(i).zfill(5)}_integrated_movie.mrc"
-                for i in range(indices.min_index, indices.max_index + 1)
-            ]
-
-            for idx, filename in enumerate(filenames):
+            # Process each file of the block in acquisition order
+            failed_files = []
+            for idx, filename in enumerate(indices.files):
                 file_path = folder / filename
-                if not file_path.exists():
-                    log_print(f"File not found: {file_path}")
-                    continue
 
                 # Process diffraction pattern
                 result = diffraction_analyzer.process_mrc_file(str(file_path))
                 if result is None:
+                    failed_files.append(filename)
                     continue
 
                 # Collect results
@@ -1098,9 +1431,11 @@ def main() -> int:
                 ])
 
             # Verify data consistency
-            expected_count = indices.max_index - indices.min_index + 1
-            if len(csv_data) != expected_count:
-                log_print(f"Error: Expected {expected_count} sums, but got {len(csv_data)}. Skipping.")
+            if failed_files:
+                shown = ', '.join(failed_files[:5]) + (', ...' if len(failed_files) > 5 else '')
+                log_print(f"Warning: Skipping block {folder_name}: {len(failed_files)} of "
+                          f"{indices.total_files} files could not be processed ({shown})",
+                          logging.WARNING)
                 continue
 
             # Create DataFrame and process data
@@ -1108,6 +1443,9 @@ def main() -> int:
                 array_size = int(np.sqrt(len(sums)))
                 if array_size * array_size != len(sums):
                     raise ValueError(f"The number of sums ({len(sums)}) is not a perfect square.")
+
+                # Create Reyes.json file only for a complete, valid block
+                file_handler.create_reyes_json(folder, indices)
 
                 # Update array indices
                 for idx, row in enumerate(csv_data):
@@ -1204,7 +1542,7 @@ def main() -> int:
                     return 0
 
             except ValueError as e:
-                log_print(f"Error reshaping arrays for {folder_name}: {str(e)}. Skipping.")
+                log_print(f"Warning: Skipping block {folder_name}: {str(e)}", logging.WARNING)
                 continue
 
         log_print('All diffraction map blocks have been processed!')

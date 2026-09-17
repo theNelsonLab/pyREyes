@@ -16,7 +16,7 @@ from shapely.ops import unary_union
 from typing import Any, Dict, List, Optional, Tuple
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 
-__version__ = '3.4.0'
+__version__ = '3.4.10'
 __min_required_version__ = '3.4.0'
 
 from pyREyes.lib.ui.REyes_ui import print_banner
@@ -49,7 +49,7 @@ class GridSquareProcessor:
         Initialize GridSquareProcessor with microscope and filtering configuration.
         
         Args:
-            microscope_type: Type of microscope ("Arctica-CETA" or "F200-Apollo" or "F30-TVIPS", or "Arctica-Apollo")
+            microscope_type: Microscope name, a key of config/microscope_configs.json
             filtering_type: Type of filtering to apply ("default", "narrow", or "well-plate")
             
         Raises:
@@ -128,7 +128,7 @@ class GridSquareProcessor:
             coordinates = []
             stage_z = None
             
-            with mdoc_path.open('r') as file:
+            with mdoc_path.open('r', encoding='utf-8', errors='replace') as file:
                 for line in file:
                     if line.startswith('StagePosition ='):
                         try:
@@ -250,12 +250,23 @@ class GridSquareProcessor:
                 mrc_data, rotation_angle, extent, coordinates
             )
             masked_image = ImageProcessor.mask_image_outside_polygon(image_from_matplotlib, extent, merged) # Get the image in polygon
-            dark_area, bright_area, binary_image = ImageProcessor.calculate_normalized_areas(masked_image, dark_threshold=self.config.dark_threshold)  # Get the binary image 
+            
+            dark_area, bright_area, binary_image, mu_dark, kde_dark, mu_bright, kde_bright, binarization_threshold = ImageProcessor.calculate_normalized_areas(masked_image)
+
+            if self.debug:
+                self.plotting_manager.plot_intensity_histogram(
+                    masked_image,
+                    save_path="01_intensity_distribution.png",
+                    mu_dark=mu_dark, kde_dark=kde_dark,
+                    mu_bright=mu_bright, kde_bright=kde_bright,
+                    threshold=binarization_threshold,
+                )
+
             labeled_image, num_features, region_sizes = ImageProcessor.find_connected_regions(binary_image) # Get the number of connected regions in the entire image
             
             if self.debug:
-                PlottingManager.plot_image(binary_image, "Binary Image") # Plot the binary image
-                ImageProcessor.plot_labeled_regions_random_colors(labeled_image, num_features, save_path = "colored regions") # Plot the labeled regions
+                PlottingManager.plot_image(binary_image, str(self.output_dir / "02_Binary_Image.png")) # Plot the binary image
+                ImageProcessor.plot_labeled_regions_random_colors(labeled_image, num_features, save_path = str(self.output_dir / "03_colored_regions.png")) # Plot the labeled regions
                 
             # ----------------- Calculating the edge strip -----------------
             space_width, bar_width, strip = ImageProcessor.compute_strip_and_spacing(
@@ -266,7 +277,7 @@ class GridSquareProcessor:
             )
 
             clearly_labeled_image, new_numer_features = ImageProcessor.remove_edge_touching_regions(labeled_image, extent, region_sizes, strip)
-            centroids = ImageProcessor.merge_small_regions_centroids(clearly_labeled_image, extent, std_merge_threshold = 1.5, space_width = space_width, binary_image = binary_image, debug = self.debug, plotting_manager=self.plotting_manager)
+            centroids = ImageProcessor.merge_small_regions_centroids(clearly_labeled_image, extent, pitch_merge_ratio = 0.8, space_width = space_width, binary_image = binary_image, debug = self.debug, plotting_manager=self.plotting_manager)
             centroid_list = [(round(x, 3), round(y, 3)) for x, y in centroids.values()]
 
             if not centroid_list:
@@ -355,7 +366,12 @@ class GridSquareProcessor:
             
             # Generate nav files first (less memory intensive)
             self.nav_generator.generate_nav_file(sorted_centroids, stage_z, "grid_squares.nav")
-            self.nav_generator.generate_eucentricity_nav(eucentricity_centroids, stage_z)                
+            self.nav_generator.generate_eucentricity_nav(eucentricity_centroids, stage_z)
+
+            # Plot clean montage without any overlays
+            self.plotting_manager.plot_montage_from_image(montage_image, extent, [], save_path = "montage_clean", title = "Grid Montage")
+
+            # Plot montages with overlays
             self.plotting_manager.plot_montage_from_image(montage_image, extent, sorted_centroids, save_path = "combined_grid_montage")
             self.plotting_manager.plot_montage_from_image(montage_image, extent, eucentricity_centroids, save_path = "eucentricity_points")
 

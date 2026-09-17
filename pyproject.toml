@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyREyes"
-version = "3.4.0"
+version = "3.4.10"
 authors = [
     { name = "Dmitry Eremin", email = "eremin@caltech.edu" },
     { name = "Hongyu Zhang", email = "hzhang7@caltech.edu" }
@@ -18,7 +18,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "pyautoprocess>=0.1.1",
+    "pyautoprocess>=0.5.1,<0.6",
     "numpy==2.2.6",
     "numba==0.61.2",
     "pandas==2.2.3",
@@ -28,7 +28,8 @@ dependencies = [
     "scikit-image==0.25.2",
     "scikit-learn==1.6.1",
     "shapely==2.1.1",
-    "psutil==7.0.0"
+    "psutil==7.0.0",
+    "mrcfile>=1.5"
 ]
 
 [project.scripts]
@@ -42,10 +43,18 @@ create-final-targets-4 = "pyREyes.create_final_targets_nav:main"
 mnt-maps-targets-5 = "pyREyes.mnt_maps_targets:main"
 reyes-monitor = "pyREyes.REyes:main"
 
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Run the tests against the sources in this checkout.
+pythonpath = ["src"]
+
 [project.urls]
-Homepage = "https://github.com/theNelsonLab/REyes"
-Issues = "https://github.com/theNelsonLab/REyes/issues"
-Documentation = "https://github.com/theNelsonLab/REyes/tree/main/src/pyREyes/docs"
+Homepage = "https://github.com/theNelsonLab/pyREyes"
+Issues = "https://github.com/theNelsonLab/pyREyes/issues"
+Documentation = "https://github.com/theNelsonLab/pyREyes/tree/main/src/pyREyes/docs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pyREyes"]

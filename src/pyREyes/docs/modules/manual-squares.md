@@ -1,6 +1,6 @@
 # REyes Manual Grid Squares Adder (MGSA)
 
-**Part of pyREyes v3** - Manual grid square selection processing tool
+**Part of pyREyes v3.4.10** - Manual grid square selection processing tool
 
 The Manual Grid Squares Adder processes SerialEM navigation files containing manually added grid squares' points, converting them into the standardized format required for the REyes automated collection pipeline. This tool allows to override automated detection with custom grid square selections.
 
@@ -56,6 +56,6 @@ No command line arguments are required. The tool automatically:
 
 ## Support and Documentation
 
-- **Homepage**: https://github.com/theNelsonLab/REyes
-- **Issues**: https://github.com/theNelsonLab/REyes/issues
-- **Documentation**: https://github.com/theNelsonLab/REyes/tree/main/src/pyREyes/docs
+- **Homepage**: https://github.com/theNelsonLab/pyREyes
+- **Issues**: https://github.com/theNelsonLab/pyREyes/issues
+- **Documentation**: https://github.com/theNelsonLab/pyREyes/tree/main/src/pyREyes/docs

@@ -24,7 +24,7 @@ from pyREyes.lib.REyes_logging import setup_logging, log_print
 from pyREyes.lib.image_processing.PlottingManager import PlottingManager
 from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs
 
-__version__ = '3.4.0'
+__version__ = '3.4.10'
 __min_required_version__ = '3.4.0'
 
 MICROSCOPE_CONFIGS = load_microscope_configs()
@@ -225,9 +225,37 @@ class DiffractionMapProcessor:
             log_print(f"Error processing diffraction map: {str(e)}", logging.ERROR)
             raise
 
+def preprocess_montage_frames(
+    mnt: hs.signals.Signal2D,
+    coordinates: Coordinates
+) -> Dict[int, np.ndarray]:
+    """
+    Preprocess all montage frames once for reuse across multiple plots.
+
+    Args:
+        mnt: Hyperspy signal containing all frames
+        coordinates: Coordinates object with rotation angle and mapping
+
+    Returns:
+        Dictionary mapping image_index to preprocessed (clipped + rotated) frame
+    """
+    log_print("Preprocessing montage frames (this will be done only once)...")
+    processed_frames = {}
+
+    for image_index, coord_index in coordinates.mapping.items():
+        if image_index - 1 < len(mnt):
+            # Clip and rotate the frame
+            frame = PlottingManager.clip_image(mnt.inav[image_index - 1].data)
+            frame_rotated = PlottingManager.rotate_with_nan(frame, coordinates.rotation_angle)
+            processed_frames[image_index] = frame_rotated
+
+    log_print(f"Preprocessed {len(processed_frames)} montage frames")
+    return processed_frames
+
+
 class Plotter:
     """Handles plot generation and customization."""
-    
+
     def __init__(self, config: PlotConfig):
         self.config = config
         self.manual_limits = None
@@ -255,21 +283,33 @@ class Plotter:
         self,
         df: pd.DataFrame,
         coordinates_nav: Dict[int, Tuple[float, float]],
-        mnt: hs.signals.Signal2D,
         title: str,
         output_path: str,
         cbar_label: str,
         target_color: str,
         quality_map: bool = False,
-        coordinates: Optional[Coordinates] = None
+        coordinates: Optional[Coordinates] = None,
+        processed_frames: Optional[Dict[int, np.ndarray]] = None
     ) -> None:
-        """Creates and saves the plot with all overlays."""
+        """Creates and saves the plot with all overlays.
+
+        Args:
+            df: DataFrame with plot data
+            coordinates_nav: Dictionary of navigation coordinates
+            title: Plot title
+            output_path: Path to save the plot
+            cbar_label: Colorbar label
+            target_color: Color for target markers
+            quality_map: Whether this is a quality map
+            coordinates: Coordinates object (required if showing montage)
+            processed_frames: Preprocessed montage frames (if montage should be shown)
+        """
         # Create figure first
         plt.figure(figsize=self.config.figure_size)
-        
+
         # Set plot limits
         self._set_plot_limits(df)
-        
+
         # Auto-size points unless fixed size is explicitly requested
         if not self.use_fixed_size and self.show_diff_map:
             optimal_size = self.calculate_optimal_point_size(df)
@@ -277,10 +317,10 @@ class Plotter:
             self.config.dpix_size = optimal_size
         else:
             log_print(f"Using fixed point size: {self.config.dpix_size}", logging.INFO)
-        
+
         # Plot montage background (if enabled)
-        if coordinates is not None and self.show_montage:
-            self._plot_montage_frames(mnt, coordinates)
+        if coordinates is not None and self.show_montage and processed_frames is not None:
+            self._plot_montage_frames(processed_frames, coordinates)
         
         # Plot diffraction map (if enabled)
         scatter = None
@@ -349,17 +389,22 @@ class Plotter:
         plt.ylim(y_min, y_max)
         plt.gca().set_aspect('equal', adjustable='box')
 
-    def _plot_montage_frames(self, mnt: hs.signals.Signal2D, coordinates: Coordinates) -> None:
+    def _plot_montage_frames(self, processed_frames: Dict[int, np.ndarray], coordinates: Coordinates) -> None:
+        """Plot montage frames using preprocessed (cached) frames.
+
+        Args:
+            processed_frames: Dictionary of preprocessed frames (already clipped and rotated)
+            coordinates: Coordinates object with position information
+        """
         for image_index, coord_index in coordinates.mapping.items():
-            if image_index - 1 < len(mnt):
-                frame = PlottingManager.clip_image(mnt.inav[image_index - 1].data)
-                frame_rotated = PlottingManager.rotate_with_nan(frame, coordinates.rotation_angle)
-                
+            if image_index in processed_frames:
+                frame_rotated = processed_frames[image_index]
+
                 x, y = coordinates.get_frame_position(coord_index)
                 half_size = coordinates.image_size / 2
-                extent = [x - half_size, x + half_size, 
+                extent = [x - half_size, x + half_size,
                          y - half_size, y + half_size]
-                
+
                 plt.imshow(frame_rotated, extent=extent, origin='lower',
                           cmap='gray', alpha=1.0)
 
@@ -535,7 +580,12 @@ def main() -> int:
         # Load files
         mnt = hs.load(mrc_path)
         coordinates = Coordinates.from_mdoc(mdoc_path, scaling_factor)
-        
+
+        # Preprocess montage frames ONCE (if montage will be shown)
+        processed_frames = None
+        if not args.no_mnt:
+            processed_frames = preprocess_montage_frames(mnt, coordinates)
+
         # Load nav coordinates if targets are to be plotted
         coordinates_nav = {}
         if not args.no_targets:
@@ -627,13 +677,13 @@ def main() -> int:
                 plotter.create_plot(
                     df,
                     coordinates_nav,
-                    mnt,
                     config['title'],
                     os.path.join(output_dir, config['output_file']),
                     config['cbar_label'],
                     'white',
                     config['quality_map'],
-                    coordinates
+                    coordinates,
+                    processed_frames
                 )
             except Exception as e:
                 log_print(f"Error processing {config['column']}: {str(e)}", logging.ERROR)

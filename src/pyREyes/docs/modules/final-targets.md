@@ -1,6 +1,6 @@
 # REyes Final Targets Processor (FTP)
 
-**Part of pyREyes v3** - Final target combination and spatial filtering tool
+**Part of pyREyes v3.4.10** - Final target combination and spatial filtering tool
 
 Combines multiple navigation files into a final target list while ensuring proper spatial distribution with minimum separation distances.
 
@@ -51,7 +51,8 @@ create-final-targets-4
 | `--top-target-per-category` | int | `2` | Targets per category (category mode) |
 | `--top-target-per-block` | int | *None* | Targets per block (block mode) |
 | `--tolerance` | float | `10.1` | Minimum distance between targets (microns) |
-| `--input-files` | list | *auto* | Custom input navigation files |
+| `--input-files` | list | *auto* | Custom input navigation files (category mode) |
+| `--target-lists` | list | `sum peaks dqi` | Target lists for block mode: `sum`, `peaks`, `dqi` (1-3 values). Applies only with `--top-target-per-block` |
 
 ---
 
@@ -87,6 +88,6 @@ create-final-targets-4
 
 ## Support and Documentation
 
-- **Homepage**: https://github.com/theNelsonLab/REyes
-- **Issues**: https://github.com/theNelsonLab/REyes/issues
-- **Documentation**: https://github.com/theNelsonLab/REyes/tree/main/src/pyREyes/docs
+- **Homepage**: https://github.com/theNelsonLab/pyREyes
+- **Issues**: https://github.com/theNelsonLab/pyREyes/issues
+- **Documentation**: https://github.com/theNelsonLab/pyREyes/tree/main/src/pyREyes/docs

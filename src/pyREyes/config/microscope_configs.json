@@ -1,7 +1,6 @@
 {
     "Arctica-CETA": {
         "scaling": 1.2,
-        "dark_threshold": 0.07,
         "camera_length": 960,
         "pixel_size": 0.028,
         "wavelength": 0.0251,
@@ -16,7 +15,6 @@
     },
     "F200C-Apollo": {
         "scaling": 1.2,
-        "dark_threshold": 0.07,
         "camera_length": 540,
         "pixel_size": 0.016,
         "wavelength": 0.0251,
@@ -31,7 +29,6 @@
     },
     "Arctica-Apollo-SM": {
         "scaling": 1.2,
-        "dark_threshold": 0.07,
         "camera_length": 560,
         "pixel_size": 0.016,
         "wavelength": 0.0251,
@@ -46,7 +43,6 @@
     },
     "Arctica-Apollo-Prot": {
         "scaling": 1.2,
-        "dark_threshold": 0.07,
         "camera_length": 1280,
         "pixel_size": 0.016,
         "wavelength": 0.0251,
@@ -61,7 +57,6 @@
     },
     "F30-TVIPS": {
         "scaling": 1.8,
-        "dark_threshold": 0.07,
         "camera_length": 1320,
         "pixel_size": 0.031,
         "wavelength": 0.0197,
@@ -76,7 +71,6 @@
     },
     "Spectra-CETA": {
         "scaling": 1.2,
-        "dark_threshold": 0.07,
         "camera_length": 1224,
         "pixel_size": 0.028,
         "wavelength": 0.0197,

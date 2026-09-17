@@ -1,7 +1,9 @@
 import os
 import random
+import logging
 import numpy as np
 from pyREyes.lib.REyes_errors import GridSquareError
+from pyREyes.lib.REyes_logging import log_print
 from pyREyes.lib.grid_processing.GridProcessor import GridProcessor
 from pyREyes.lib.image_processing.PlottingManager import PlottingManager
 from scipy.ndimage import rotate, label
@@ -19,19 +21,29 @@ class ImageProcessor:
         self.debug = False
 
     @staticmethod
-    def calculate_normalized_areas(image: np.ndarray, dark_threshold=0.3):
+    def calculate_normalized_areas(image: np.ndarray):
         """
-        Computes the normalized area of dark regions in an image and 
+        Computes the normalized area of dark regions in an image and
         returns a binary image where dark regions are 0 (black), bright regions are 255 (white),
         and NaNs are preserved.
 
+        The binarization threshold is determined automatically by:
+          1. Normalizing pixel values to [0, 1].
+          2. Splitting valid pixels into a "dark half" (< 0.5) and a "bright half" (>= 0.5).
+          3. Fitting a KDE to each half and finding its mode (true histogram peak).
+          4. Using the midpoint between the two modes as the cutoff.
+
         Args:
             image (np.ndarray): Input image array (can contain NaNs).
-            dark_threshold (float): Intensity threshold for dark regions (default = 0.3).
 
         Returns:
-            tuple: (normalized_dark_area, normalized_bright_area, binary_image)
+            tuple: (dark_area, bright_area, binary_image,
+                    mu_dark, kde_dark, mu_bright, kde_bright, binarization_threshold)
+                   kde_dark / kde_bright are scipy gaussian_kde objects for plotting,
+                   binarization_threshold is the midpoint between the two KDE peaks.
         """
+        from scipy.stats import gaussian_kde
+
         try:
             # Normalize the image to [0, 1], ignoring NaNs
             image_min, image_max = np.nanmin(image), np.nanmax(image)
@@ -39,6 +51,32 @@ class ImageProcessor:
 
             # Mask valid (non-NaN) pixels
             valid_mask = ~np.isnan(normalized_image)
+            valid_pixels = normalized_image[valid_mask].ravel()
+
+            # Split into dark (<0.5) and bright (>=0.5) halves
+            dark_half = valid_pixels[valid_pixels < 0.5]
+            bright_half = valid_pixels[valid_pixels >= 0.5]
+
+            # Find the mode of each half via KDE evaluated on a fine grid.
+            # KDE is robust to skewed distributions where MLE mean ≠ histogram peak.
+            if len(dark_half) > 1:
+                kde_dark = gaussian_kde(dark_half)
+                x_dark = np.linspace(0.0, 0.5, 2000)
+                mu_dark = float(x_dark[np.argmax(kde_dark(x_dark))])
+            else:
+                kde_dark = None
+                mu_dark = 0.25
+
+            if len(bright_half) > 1:
+                kde_bright = gaussian_kde(bright_half)
+                x_bright = np.linspace(0.5, 1.0, 2000)
+                mu_bright = float(x_bright[np.argmax(kde_bright(x_bright))])
+            else:
+                kde_bright = None
+                mu_bright = 0.75
+
+            # Threshold = midpoint between the two KDE peaks
+            dark_threshold = (mu_dark + mu_bright) / 2.0
 
             # Classify dark and bright pixels (only where valid)
             dark_pixels = (normalized_image < dark_threshold) & valid_mask
@@ -53,7 +91,10 @@ class ImageProcessor:
             binary_image[dark_pixels] = 0.0
             binary_image[bright_pixels] = 255.0
 
-            return dark_area, bright_area, binary_image.astype(np.float32)
+            return (
+                dark_area, bright_area, binary_image.astype(np.float32),
+                mu_dark, kde_dark, mu_bright, kde_bright, dark_threshold
+            )
 
         except Exception as e:
             raise GridSquareError(f"Error calculating normalized areas: {str(e)}") from e
@@ -96,28 +137,9 @@ class ImageProcessor:
 
             # Relabel after removing small regions
             new_labeled_image, new_num_features = label(labeled_image > 0)
-
-            # Get updated region sizes
             new_region_sizes = np.bincount(new_labeled_image.ravel())
 
-            # --- NEW: Remove overly large regions (> mean + 2 * std), excluding background ---
-            if len(new_region_sizes) > 1:
-                nonzero_sizes = new_region_sizes[1:]  # Exclude background label 0
-                mean_size = np.mean(nonzero_sizes)
-                std_size = np.std(nonzero_sizes)
-                upper_threshold = mean_size + 2 * std_size
-
-                large_region_labels = np.where(new_region_sizes > upper_threshold)[0]
-                large_region_labels = large_region_labels[large_region_labels != 0]  # Avoid label 0
-                remove_mask = np.isin(new_labeled_image, large_region_labels)
-                new_labeled_image[remove_mask] = 0
-
-                # Final relabeling
-                new_labeled_image, new_num_features = label(new_labeled_image > 0)
-                new_region_sizes = np.bincount(new_labeled_image.ravel())
-
-
-                return new_labeled_image, new_num_features, new_region_sizes
+            return new_labeled_image, new_num_features, new_region_sizes
 
         except Exception as e:
             raise GridSquareError(f"Error finding connected regions: {str(e)}") from e
@@ -346,7 +368,7 @@ class ImageProcessor:
                 extent, 
                 space_width = None, 
                 area_threshold_ratio=0.1, 
-                std_merge_threshold = 2.5, 
+                pitch_merge_ratio = 0.8, 
                 distinct_label_offset: int = 1000, 
                 binary_image=None, 
                 debug = False,
@@ -375,7 +397,7 @@ class ImageProcessor:
 
 
             centroid_list = list(centroids.values())
-            plotting_manager.plot_montage_from_image(binary_image, extent, centroid_list, save_path="centroids_pre_size_merge.png")
+            plotting_manager.plot_montage_from_image(binary_image, extent, centroid_list, save_path="04_centroids_pre_size_merge.png")
             
 
         while True:
@@ -429,7 +451,7 @@ class ImageProcessor:
 
         if debug:
             centroid_list = list(centroids.values())
-            plotting_manager.plot_montage_from_image(binary_image, extent, centroid_list, save_path="centroids_pre_std_merge.png")
+            plotting_manager.plot_montage_from_image(binary_image, extent, centroid_list, save_path="05_centroids_pre_pitch_merge.png")
 
         
         centroid_coords = np.array(list(centroids.values()))
@@ -440,7 +462,6 @@ class ImageProcessor:
         dist_matrix = cdist(centroid_coords, centroid_coords)
         np.fill_diagonal(dist_matrix, np.inf)
         nearest_distances = np.min(dist_matrix, axis=1)
-        std_dev = np.std(nearest_distances)
         
         iteration = 0
         
@@ -461,35 +482,54 @@ class ImageProcessor:
             dist_matrix = cdist(centroid_coords, centroid_coords)
             np.fill_diagonal(dist_matrix, np.inf)
             nearest_distances = np.min(dist_matrix, axis=1)
-            mean_dist = np.mean(nearest_distances)
+            
+            # Derive actual structural lattice pitch from the image
+            lattice_pitch = np.median(nearest_distances)
 
             close_pairs = []
             label_keys = list(centroids.keys())
+            
+            lines_to_plot = []
 
             for i, d in enumerate(nearest_distances):
-                # First condition is detecting close pairs, and the second makes sure that they are not coming from two different grid squares.
-                if (d < (mean_dist - std_merge_threshold * std_dev)):
-                    j = np.argmin(dist_matrix[i])
-                    label_i = label_keys[i]
-                    label_j = label_keys[j]
+                j = np.argmin(dist_matrix[i])
+                label_i = label_keys[i]
+                label_j = label_keys[j]
+                will_merge = False
 
+                # Ensure j's closest neighbor is also i (Mutual Nearest Neighbor)
+                k = np.argmin(dist_matrix[j])
+                is_mutual = (k == i)
+
+                # Strictly merge only components separated by less than the specified fraction of the true grid pitch
+                if is_mutual and (d < lattice_pitch * pitch_merge_ratio):
                     # Do not merge edge touching regions
                     if (
                         label_i < distinct_label_offset and
                         label_j < distinct_label_offset and
                         label_i != label_j
                     ):
-                        close_pairs.append((i, j))
+                        if i < j:  # Present each mutual pair exactly once
+                            close_pairs.append((i, j))
+                        will_merge = True
+                        
+                p1 = centroid_coords[i]
+                p2 = centroid_coords[j]
+                lines_to_plot.append((p1, p2, d, will_merge))
+
+            if debug: 
+                centroid_list = list(centroids.values())
+                plotting_manager.plot_diagnostics_with_lines(binary_image, extent, centroid_list, lines_to_plot, save_path=f"06_merge_{pitch_merge_ratio}_{iteration}.png")
+                iteration += 1
+
+            if debug:
+                log_print(f"Median lattice pitch: {lattice_pitch}", logging.DEBUG)
+                log_print(f"Nearest distances: {nearest_distances}", logging.DEBUG)
+                log_print(f"Pitch merge ratio threshold: {pitch_merge_ratio}", logging.DEBUG)
 
             if not close_pairs:
                 if debug: 
-                    print("No more close pairs to merge.")
-                    print("Mean distance and std deviation:")
-                    print(mean_dist, std_dev)
-                    print("Nearest distances:")
-                    print(nearest_distances)
-                    print("Standard deviation threshold:")
-                    print(std_merge_threshold)
+                    log_print("No more close pairs to merge.", logging.DEBUG)
                 break
 
             label_keys = list(centroids.keys())
@@ -503,22 +543,6 @@ class ImageProcessor:
                 mask_i = labels == label_i
                 mask_j = labels == label_j
                 labels[mask_i | mask_j] = label_j
-
-            # Final centroid calculation
-            centroids = {}
-            for label_val in np.unique(labels):
-                if label_val == 0:
-                    continue
-                mask = labels == label_val
-                centroids[label_val] = (np.mean(X[mask]), np.mean(Y[mask]))
-            
-            if debug: 
-                centroid_list = list(centroids.values())
-                plotting_manager.plot_montage_from_image(binary_image, extent, centroid_list, save_path=f"{area_threshold_ratio}_{std_merge_threshold}_{iteration}.png")
-                iteration += 1
-
-
-
         # Final centroid calculation
         centroids = {}
         for label_val in np.unique(labels):

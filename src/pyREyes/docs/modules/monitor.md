@@ -1,6 +1,6 @@
 # REyes Processing Monitor
 
-**Part of pyREyes v3.3** - Automated workflow orchestration and monitoring tool
+**Part of pyREyes v3.4.10** - Automated workflow orchestration and monitoring tool
 
 Provides automated execution and monitoring of the complete diffraction data processing pipeline using a state machine to track progress and automatically trigger each processing step.
 
@@ -44,19 +44,83 @@ This tool **orchestrates the entire pyREyes pipeline**:
 ### Usage
 ```bash
 reyes-monitor
+
+# With movie processing
+reyes-monitor --autoprocess --microscope-config Arctica-CETA-mrc-SM
 ```
 
 ### Command Line Arguments
+
+#### REyes arguments
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
 | `--microscope` | string | `Arctica-CETA` | Microscope configuration preset |
 | `--filtering` | string | `default` | Grid square filtering strategy |
 | `--manual-squares` | flag | `False` | Enable manual grid square selection |
+| `--camera-length` | float | config | Override camera length in mm |
+| `--top-target-per-category` | int | `2` | Top targets per category (used by `create-final-targets-4`) |
+| `--top-target-per-block` | int | none | Top targets per block; enables block-based selection in `create-final-targets-4` |
+| `--target-lists` | list | `sum peaks dqi` | Target lists for block-based selection: `sum` (intensity), `peaks` (diffraction peaks), `dqi` (quality); 1-3 values. Applies only with `--top-target-per-block`; category-based selection always uses the nxds, quality, spots and sum navigation files |
 | `--starting-state` | string | `WAITING_FOR_MONTAGE` | Begin from specific state |
 | `--current-block` | int | `1` | Set current diffraction block number |
 | `--stepscan-only` | flag | `False` | Skip movie collection and processing |
-| `--autoprocess` | flag | `False` | Enable automatic movie processing |
+| `--montage-only` | flag | `False` | Process only the initial montage and grid squares, then exit |
+| `--subprocess-timeout` | float | `1800` | Seconds before a processing subprocess is treated as hung and killed |
+| `--autosolve-timeout` | float | none | Seconds before AutoSolve is killed (no limit by default) |
+| `--autoprocess` | flag | `False` | Enable automatic movie processing (requires `--microscope-config`) |
+
+#### AutoProcess arguments (passed to `autoprocess`)
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--microscope-config` | string | none | Microscope configuration preset (required with `--autoprocess`) |
+| `--config-file` | string | none | Path to microscope configuration file (default: microscope_configs.json) |
+| `--rotation-axis` | string | none | Rotation axis (e.g. `"-1 0 0"`) |
+| `--frame-size` | int | none | Frame size of the movie (e.g. 2048) |
+| `--signal-pixel` | int | none | Signal pixel radius |
+| `--min-pixel` | int | none | Minimum pixel radius |
+| `--background-pixel` | int | none | Background pixel radius |
+| `--pixel-size` | float | none | Pixel size in microns (e.g. 0.028) |
+| `--wavelength` | float | none | Beam wavelength (e.g. 0.0251) |
+| `--beam-center-x` | int | none | Beam center X coordinate |
+| `--beam-center-y` | int | none | Beam center Y coordinate |
+| `--file-extension` | string | none | File extension for movies (e.g. `.mrc` or `.ser`) |
+| `--detector-distance` | float | none | Detector distance in mm |
+| `--exposure` | float | none | Exposure time |
+| `--rotation` | float | none | Rotation value |
+| `--pointless` | flag | `False` | Run pointless for space group analysis |
+| `--parallel` | flag | `False` | Use parallel XDS (xds_par) instead of serial XDS |
+| `--dqa` | flag | `False` | Enable diffraction quality analysis and frame selection |
+| `--verbose` | flag | `False` | Enable verbose logging for detailed conversion validation |
+| `--res-range` | string | none | Manual resolution range in Angstroms (overrides calculated values) |
+| `--friedel` | string | none | Set Friedel's law for XDS (`true` or `false`, default: true) |
+
+#### AutoSolve arguments (passed to `autosolve`)
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--autosolve` | flag | `False` | Run AutoSolve after AutoProcess |
+| `--shelx` | `t`, `d`, `td` | `td` | Which SHELX programs to run: t=SHELXT only, d=SHELXD only, td=both |
+| `--ntryt` | int | `1000` | Number of trials for initial SHELXD screening |
+| `--ntryf` | int | `10000` | Number of trials for final SHELXD runs |
+| `--space-group` | string | none | Target specific space group (1-230) or by name without spaces (e.g. P212121) |
+| `--atoms` | string | none | Comma-separated list of atoms for SFAC (default: C,H,N,O,S) |
+| `--type` | `organic`, `inorganic` | none | Type of compound |
+| `--composition` | string | none | Chemical formula (overrides `--atoms`), e.g. `CaTiO3` |
+
+----------|------|---------|-------------|
+| `--microscope` | string | `Arctica-CETA` | Microscope configuration preset |
+| `--filtering` | string | `default` | Grid square filtering strategy |
+| `--manual-squares` | flag | `False` | Enable manual grid square selection |
+| `--starting-state` | string | `WAITING_FOR_MONTAGE` | Begin from specific state |
+| `--current-block` | int | `1` | Set current diffraction block number |
+| `--stepscan-only` | flag | `False` | Skip movie collection and processing |
+| `--montage-only` | flag | `False` | Process only the initial montage and grid squares, then exit |
+| `--subprocess-timeout` | float | `1800` | Seconds before a processing subprocess is treated as hung and killed |
+| `--autosolve-timeout` | float | none | Seconds before AutoSolve is killed (no limit by default) |
+| `--autoprocess` | flag | `False` | Enable automatic movie processing (requires `--microscope-config`) |
+| `--microscope-config` | string | none | pyautoprocess microscope preset for movie processing |
 | `--autosolve` | flag | `False` | Enable automatic structure solution |
 
 ---
@@ -96,11 +160,14 @@ reyes-monitor
 - Monitors targets log files for newly acquired movies
 - Automatically renames and processes movies with AutoProcess
 - Tracks processed movies to avoid duplication
+- Writes `autoprocess_done.flag` in the movie folder after autoprocess succeeds; a restarted monitor skips movies with this flag (without `--autoprocess`, movies that were already renamed) and still counts them in the totals
+- Reports an autoprocess run that exits with a non-zero code as a failure, and marks a movie as done (`autoprocess_done.flag`) only after a successful run
 - Supports configurable AutoProcess parameters
 
 ### 4. Error Handling and Recovery
 - Comprehensive logging with timestamps and error traces
 - Timeout handling for manual intervention steps
+- Processing subprocesses that exceed `--subprocess-timeout` are killed together with their child processes and handled like a failed step
 - Graceful failure recovery with state preservation
 - Detailed progress tracking and completion detection
 
@@ -108,6 +175,6 @@ reyes-monitor
 
 ## Support and Documentation
 
-- **Homepage**: https://github.com/theNelsonLab/REyes
-- **Issues**: https://github.com/theNelsonLab/REyes/issues
-- **Documentation**: https://github.com/theNelsonLab/REyes/tree/main/src/pyREyes/docs
+- **Homepage**: https://github.com/theNelsonLab/pyREyes
+- **Issues**: https://github.com/theNelsonLab/pyREyes/issues
+- **Documentation**: https://github.com/theNelsonLab/pyREyes/tree/main/src/pyREyes/docs

@@ -60,8 +60,9 @@ class PlottingManager:
     def plot_montage_from_image(self,
                                 montage_image: np.ndarray,
                                 extent,
-                                centroids: List[Tuple[float, float]], 
-                                save_path = "combined_grid_montage") -> None:
+                                centroids: List[Tuple[float, float]],
+                                save_path = "combined_grid_montage",
+                                title: str = "Combined Grid Montage with Found Grid Squares") -> None:
         """Plot a pre-rendered montage image with overlaid centroids."""
         try:
             fig, ax = plt.subplots(figsize=(10, 10))
@@ -76,7 +77,7 @@ class PlottingManager:
             # Plot centroids
             self._plot_centroids(centroids, ax)
 
-            ax.set_title('Combined Grid Montage with Found Grid Squares')
+            ax.set_title(title)
             ax.set_xlabel(r'X ($\mu$m)')
             ax.set_ylabel(r'Y ($\mu$m)')
 
@@ -91,6 +92,59 @@ class PlottingManager:
 
         except Exception as e:
             raise GridSquareError(f"Error plotting montage from image: {str(e)}") from e
+
+    def plot_diagnostics_with_lines(self,
+                                montage_image: np.ndarray,
+                                extent,
+                                centroids: List[Tuple[float, float]],
+                                lines_to_plot: List[Tuple[Tuple[float, float], Tuple[float, float], float, bool]],
+                                save_path="debug_diagnostic.png",
+                                title: str = "Grid Merging Diagnostics") -> None:
+        """Plot a montage image with overlaid centroids and lines indicating merging operations."""
+        try:
+            fig, ax = plt.subplots(figsize=(10, 10))
+
+            ax.imshow(montage_image, extent=extent, origin='upper', cmap='gray')
+            ax.set_xlim(extent[0], extent[1])
+            ax.set_ylim(extent[2], extent[3])
+            ax.set_aspect("equal")
+            ax.set_xlabel('X')
+            ax.set_ylabel('Y')
+
+            # Plot centroids
+            self._plot_centroids(centroids, ax)
+
+            # Overlay lines
+            for (p1, p2, dist, will_merge) in lines_to_plot:
+                color = 'red' if will_merge else 'green'
+                line_style = '-' if will_merge else '--'
+                linewidth = 2.5 if will_merge else 1.5
+                ax.plot([p1[0], p2[0]], [p1[1], p2[1]], color=color, linewidth=linewidth, linestyle=line_style)
+                
+                # Add distance label near the line middle
+                mid_x = (p1[0] + p2[0]) / 2
+                mid_y = (p1[1] + p2[1]) / 2
+                # Add slight offset to avoid drawing right over the line
+                label_weight = 'normal'
+                label_alpha = 0.3
+
+                ax.text(mid_x, mid_y, f"{dist:.1f}", color=color, fontsize=10, fontweight=label_weight, 
+                        bbox=dict(facecolor='white', alpha=label_alpha, edgecolor='none', pad=1))
+
+            ax.set_title(title)
+            ax.set_xlabel(r'X ($\mu$m)')
+            ax.set_ylabel(r'Y ($\mu$m)')
+
+            # Save and close
+            plt.savefig(
+                self.output_dir / save_path,
+                dpi=300,
+                bbox_inches='tight'
+            )
+            plt.close(fig)
+
+        except Exception as e:
+            raise GridSquareError(f"Error plotting diagnostics with lines: {str(e)}") from e
 
     
     def plot_return_image(
@@ -208,3 +262,80 @@ class PlottingManager:
         plt.axis('off')
         plt.savefig(save_path, dpi=300, bbox_inches='tight', pad_inches=0)
         plt.close()
+
+    def plot_intensity_histogram(
+        self,
+        image: np.ndarray,
+        save_path: str = "intensity_distribution.png",
+        title: str = "Pixel Intensity Distribution",
+        mu_dark: float = None,
+        kde_dark=None,
+        mu_bright: float = None,
+        kde_bright=None,
+        threshold: float = None,
+    ):
+        """
+        Plot a histogram of pixel intensities (ignoring NaNs), with optional
+        overlays of the KDE density curves and the binarization threshold.
+
+        Args:
+            image:      Input image (raw, un-normalized). NaNs are ignored.
+            save_path:  Output filename inside self.output_dir.
+            title:      Plot title.
+            mu_dark:    Mode (peak) of the dark-half KDE.
+            kde_dark:   scipy gaussian_kde object fitted to dark pixels.
+            mu_bright:  Mode (peak) of the bright-half KDE.
+            kde_bright: scipy gaussian_kde object fitted to bright pixels.
+            threshold:  Midpoint between the two peaks used as the cutoff.
+        """
+        try:
+            valid_pixels = image[~np.isnan(image)].ravel()
+
+            # Normalize to [0, 1] so x-axis matches the KDE domain
+            pmin, pmax = valid_pixels.min(), valid_pixels.max()
+            norm_pixels = (valid_pixels - pmin) / (pmax - pmin) if pmax > pmin else valid_pixels
+
+            fig, ax = plt.subplots(figsize=(9, 6))
+
+            # Histogram (density=True so KDE curves are on the same scale)
+            ax.hist(norm_pixels, bins=150, color="#4C9BE8", alpha=0.55,
+                    density=True, label="Pixel intensity")
+
+            x_full = np.linspace(0, 1, 1000)
+
+            # Dark KDE curve
+            if kde_dark is not None:
+                x_dark = np.linspace(0.0, 0.5, 1000)
+                y_dark = kde_dark(x_dark)
+                ax.plot(x_dark, y_dark, color="#E05C5C", linewidth=2.0,
+                        label=f"Dark KDE  peak={mu_dark:.3f}")
+            if mu_dark is not None:
+                ax.axvline(mu_dark, color="#E05C5C", linewidth=1.4, linestyle=":")
+
+            # Bright KDE curve
+            if kde_bright is not None:
+                x_bright = np.linspace(0.5, 1.0, 1000)
+                y_bright = kde_bright(x_bright)
+                ax.plot(x_bright, y_bright, color="#5CB85C", linewidth=2.0,
+                        label=f"Bright KDE  peak={mu_bright:.3f}")
+            if mu_bright is not None:
+                ax.axvline(mu_bright, color="#5CB85C", linewidth=1.4, linestyle=":")
+
+            # Threshold midpoint line
+            if threshold is not None:
+                ax.axvline(threshold, color="gold", linewidth=2.2, linestyle="--",
+                           label=f"Threshold (midpoint) = {threshold:.3f}")
+
+            ax.set_title(title, fontsize=13)
+            ax.set_xlabel("Normalised Pixel Intensity [0 – 1]", fontsize=11)
+            ax.set_ylabel("Density", fontsize=11)
+            ax.set_xlim(0, 1)
+            ax.legend(fontsize=9, framealpha=0.85)
+            ax.grid(True, linestyle="--", alpha=0.45)
+
+            fig.tight_layout()
+            fig.savefig(self.output_dir / save_path, dpi=300, bbox_inches="tight")
+            plt.close(fig)
+
+        except Exception as e:
+            raise GridSquareError(f"Error plotting intensity histogram: {str(e)}") from e

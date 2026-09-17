@@ -20,7 +20,7 @@ from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs
 from pyREyes.lib.REyes_utils import find_nav_file
 
 
-__version__ = '3.4.0'
+__version__ = '3.4.10'
 __min_required_version__ = '3.4.0'
 
 
