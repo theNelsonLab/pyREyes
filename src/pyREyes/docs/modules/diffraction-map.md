@@ -1,6 +1,6 @@
 # REyes Diffraction Map Processor (DMP)
 
-**Part of pyREyes v3.4.10** - Diffraction pattern quality analysis tool
+**Part of pyREyes v3.6.0** - Diffraction pattern quality analysis tool
 
 Processes blocks of diffraction images, classifies quality based on spots and Fourier Transform patterns, and generates analysis outputs and visualizations.
 
@@ -94,6 +94,11 @@ dif-map-2 --microscope Arctica-CETA --targets-per-block 6 --skip-processed
 - Frames larger than 2048x2048 have narrow bad columns/rows removed and are mean-binned by one integer factor to 2048x2048
 - Frames smaller than 2048x2048 use detection parameters tuned for small frames (`SMALL_FRAME_PARAMS`)
 - int16 frames up to 2048x2048 are processed unchanged; all other data is converted to float32; NaN/inf pixels are set to 0
+- MRC mode 0 (8-bit) frames are read as unsigned counts (0-255) unless the file header carries the IMOD stamp with the signed-bytes flag, whatever the installed MRC reader returns. Earlier releases could read 8-bit detector counts above 127 (e.g. DE Apollo frames) as negative values (since 3.6.0)
+- Frame sums are exact (integer frames summed in 64-bit integers, float frames in double precision), and spot detection works in double precision, so results do not depend on the machine or library versions (since 3.6.0). `--legacy-parse` restores the 3.4.0 frame loading (including its reader-dependent 8-bit reads) and spot-detection arithmetic; only the frame sums stay exact
+
+### Stage Coordinates
+- Each frame's stage position is read from the SerialEM log, `serialEM_log` lines after the line naming the frame (see `microscope_configs.json`). If the `Stage` line is not at that offset, the following lines are searched up to the next frame, so extra log lines between a frame and its `Stage` line no longer leave the frame without coordinates (since 3.6.0)
 
 ### Quality Classification
 - **Good diffraction**: ≥10 spots with strong pattern correlation

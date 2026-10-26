@@ -21,6 +21,7 @@ See `docs/scripts/README.md` for the differences between the two suites.
     - **FSD** (Full Self Driving): montage, eucentricity, StepScan, targets, rotation movies
     - **Screen**: montage, eucentricity, StepScan, no movies
     - **Montage**: grid overview only (automated workflow)
+  - automated FSD and Screen: new run or resume of an interrupted run from a chosen stage (see `docs/scripts/README.md`)
 - **BatchED_Main** (Ceta suite: **BatchED_Main_CETA**) - Batch collection on navigator points added by the operator: continuous rotation, still snapshots, multi-angle snapshots (+60, +30, 0, -30, -60 degrees), or Search-mode images
 - **REYES_Setup_Standalone** - Sets sample name, directory, montage/map size and tilt range so that `REyes_MNT`, `REyes_STPSCN` or `REyes_DFMV` can be run on their own
 - **AutoloaderScreen** - Loads each occupied autoloader slot in a fixed range and acquires a montage map of it
@@ -29,7 +30,7 @@ See `docs/scripts/README.md` for the differences between the two suites.
 - **Setup_Helper** - Collects all session parameters
 - **Slot_Verification_Helper** - Checks that the selected autoloader slots contain grids (multi-grid)
 - **Directory_Setup_Helper** - Creates the `<sample>-reyes` session folders
-- **Automated_Pipeline_Helper** - Runs the automated FSD / Screen / Montage pipeline for one grid
+- **Automated_Pipeline_Helper** - Runs the automated FSD / Screen / Montage pipeline for one grid (skips the stages before a resume point)
 - **Manual_Pipeline_Part1** - Montage before manual grid square selection
 - **Manual_Pipeline_Part2** - Rest of the pipeline after manual grid square selection
 - **REyes_Setup_Automated** - Prompts the operator to start REyes in every sample folder
@@ -48,7 +49,7 @@ In the Ceta suite these carry a `_CETA` suffix (e.g. `BatchED_Rotation_CETA`).
 - **REyes_ECNT** - Eucentricity determination
 - **REyes_STPSCN** - StepScan mapping
 - **REyes_DFMV** - Diffraction Movie collection
-- **REyes_SpotGuard** (DE Apollo suite only) - Checks that Low Dose is on and that the spot size in the Record area matches the expected value before StepScan and movie collection
+- **REyes_SpotGuard** - Checks that Low Dose is on and that the spot size in the Record area matches the expected value before StepScan and movie collection
 
 ### Helper Scripts:
 - **REyes_postECNT** - Post-eucentricity processing
@@ -70,35 +71,37 @@ Below are all parameters that typically require modification for different syste
 ### 1. Montage Settings (Macro: REyes_MNT)
 
 #### Ceta Script Suite - ALL MAGNIFICATION REFERENCES:
-- **Variable definition (Line ~2244):** `montage = _210LM_$mnt_sizex$mnt_size`
-- **Section header (Line ~2299):** `########TAKE INITIAL MONTAGE AT 210 LM########`
-- **Start message (Line ~2317):** `Echo Starting 210x LM montage collection`
-- **Completion message (Line ~2341):** `Echo Completed 210x LM montage data collection`
+- **Variable definition (Line ~2763):** `montage = _210LM_$mnt_sizex$mnt_size`
+- **Section header (Line ~2818):** `########TAKE INITIAL MONTAGE AT 210 LM########`
+- **Start message (Line ~2836):** `Echo Starting 210x LM montage collection`
+- **Completion message (Line ~2860):** `Echo Completed 210x LM montage data collection`
+- **Resume navigator name (Macro: Automated_Pipeline_Helper, Line ~1733):** `rs_montage = _210LM_$mnt_sizex$mnt_size` (used to read the montage navigator back when a run is resumed; must match the montage variable)
 
 → **Change ALL instances of "210" to your desired magnification**
 
 #### DE Apollo Script Suite - ALL MAGNIFICATION REFERENCES:
-- **Variable definition (Line ~2405):** `montage = _115LM_$mnt_sizex$mnt_size`
-- **Section header (Line ~2460):** `########TAKE INITIAL MONTAGE AT 115 LM########`
-- **Start message (Line ~2478):** `Echo Starting 115x LM montage collection`
-- **Completion message (Line ~2502):** `Echo Completed 115x LM montage data collection`
+- **Variable definition (Line ~2679):** `montage = _115LM_$mnt_sizex$mnt_size`
+- **Section header (Line ~2734):** `########TAKE INITIAL MONTAGE AT 115 LM########`
+- **Start message (Line ~2752):** `Echo Starting 115x LM montage collection`
+- **Completion message (Line ~2776):** `Echo Completed 115x LM montage data collection`
+- **Resume navigator name (Macro: Automated_Pipeline_Helper, Line ~1720):** `rs_montage = _115LM_$mnt_sizex$mnt_size` (used to read the montage navigator back when a run is resumed; must match the montage variable)
 
 → **Change ALL instances of "115" to your desired magnification**
 
-> **Talos F200C:** the DE Apollo suite is set up for a Talos Arctica (115x LM). On a Talos F200C use 155x LM: change all four "115" references above to "155", and set the Low Dose View magnification to 155x.
+> **Talos F200C:** the DE Apollo suite is set up for a Talos Arctica (115x LM). On a Talos F200C use 155x LM: change all five "115" references above to "155", and set the Low Dose View magnification to 155x.
 
 > **NOTE:** REyes finds the montage log from the `<number>LM` part of the file name and waits for the `Completed <number>x LM montage data collection` message, so the number must be the same in the variable definition and the completion message.
 
 #### Camera Settings
 
-**Ceta Camera Settings (Lines ~2329-2331):**
+**Ceta Camera Settings (Lines ~2848-2850):**
 ```
 SetContinuous M 0
 SetExposure M 3        ← Optimized (adjust only if performance issues)
 SetBinning M 2         ← ADJUST: Binning to achieve 2048x2048 images
 ```
 
-**DE Apollo Camera Settings (Lines ~2490-2492):**
+**DE Apollo Camera Settings (Lines ~2764-2766):**
 ```
 SetContinuous M 0
 SetExposure M 1        ← Optimized (adjust only if performance issues)
@@ -107,43 +110,46 @@ SetBinning M 4         ← ADJUST: Binning to achieve 2048x2048 images
 
 ### 2. Eucentricity Settings (Macro: REyes_ECNT)
 
-**Ceta Camera Settings (Lines ~2463-2465):**
+**Ceta Camera Settings (Lines ~3010-3012):**
 ```
 SetContinuous V 0
 SetExposure V 1.5      ← Optimized (adjust only if performance issues)
 SetBinning V 2         ← ADJUST: Binning to achieve 2048x2048 images
 ```
 
-**DE Apollo Camera Settings (Lines ~2614-2617):**
+**DE Apollo Camera Settings (Lines ~2916-2919):**
 ```
 SetContinuous V 0
-SetExposure V 1        ← Optimized (adjust only if performance issues)
+SetExposure V 0.5      ← Optimized (adjust only if performance issues)
 SetBinning V 4         ← ADJUST: Binning to achieve 2048x2048 images
-SetFrameTime V 1       ← Optimized (adjust only if performance issues)
+SetFrameTime V 0.5     ← Keep equal to the exposure
 ```
 
 ### 3. StepScan Settings (Macro: REyes_STPSCN)
 
-**Grid Parameters - BOTH SCRIPT SUITES (Ceta Lines ~2565-2566, DE Apollo Lines ~2706-2707):**
+**Grid Parameters - BOTH SCRIPT SUITES (Ceta Lines ~3140-3141, DE Apollo Lines ~3036-3037):**
 ```
 increment_x = 5        ← ADJUST: Step size in X (microns)
 increment_y = 5        ← ADJUST: Step size in Y (microns)
 ```
 
-**Ceta Camera Settings (Lines ~2586-2588):**
+**Ceta Camera Settings (Lines ~3180-3182):**
 ```
 SetContinuous R 0
 SetExposure R 1        ← Optimized (adjust only if performance issues)
 SetBinning R 2         ← ADJUST: Binning to achieve 2048x2048 images
 ```
 
-**DE Apollo Camera Settings (Lines ~2749-2757):**
+**DE Apollo Camera Settings (Lines ~3079-3099):**
 ```
 SetContinuous R 0
-SetExposure R 0.25     ← Keep equal to the frame time (one frame per image)
-SetBinning R 4         ← ADJUST: Binning to achieve 2048x2048 images
-SetFrameTime R 0.25    ← Keep equal to the exposure
+stp_exp = 0.25             ← Exposure and frame time (one frame per image)
+SetExposure R $stp_exp
+SetBinning R 4             ← ADJUST: Binning to achieve 2048x2048 images
+SetFrameTime R $stp_exp    ← Exposure and frame time are kept equal
 ```
+
+After the first exposure of each grid square the macro reads back how many frames the camera saved. If it saved more than one, it tries 0.25, 0.26 and 0.24 s in turn (Lines ~3273-3281) and logs the result as `STPSCN_FRAMES`; the check never stops the grid. If you change `stp_exp`, change these three values to match (the set value and one sensor frame longer and shorter). Set `frame_check := 1` (Line ~3093) to `0` to turn the check off.
 
 > **NOTE:** Do not insert commands (including `Echo`) between the file report and `ReportStageXYZ` in the StepScan loop. REyes reads stage coordinates a fixed number of log lines after each file name (`serialEM_log` in `microscope_configs.json`).
 
@@ -165,7 +171,7 @@ The `rotincr` parameter controls rotation steps and must match your rotation rat
 - **Ceta**: Adjust `rotincr` to achieve desired degree wedge per 3-second exposure
 - **Ceta Note**: The 0.3 dps is the apparent rotation rate; actual rotation rate is ~0.12 dps due to frame buffering delays
 
-**Ceta Rotation Settings (Lines ~2764-2766):**
+**Ceta Rotation Settings (Lines ~3694-3696):**
 ```
 rotrate := 0.3         ← ADJUST: Rotation rate (degrees per second)
 rotincr := 0.004       ← Optimized for 3-second frame intervals (adjust only if changing rotation rate)
@@ -173,28 +179,28 @@ acqrate := 0.33        ← Used in the movie folder name
 ```
 
 **DE Apollo Rotation Settings:**
-The rotation rate and frame time are asked by `START_REYES` (Setup_Helper, Lines ~1255-1265; defaults 1 deg/s and 1 s per frame). When `REyes_DFMV` is run on its own and they are not yet set, it asks for them (Lines ~3045-3051). Keep rotation rate x frame time at 1 degree per frame; `REyes_DFMV` warns otherwise. The rotation increment is calculated (Line ~3063):
+The rotation rate and frame time are asked by `START_REYES` (Setup_Helper, Lines ~1315-1323; defaults 1 deg/s and 1 s per frame). When `REyes_DFMV` is run on its own and they are not yet set, it asks for them (Lines ~3690-3696). Keep rotation rate x frame time at 1 degree per frame; `REyes_DFMV` warns otherwise. The rotation increment is calculated (Line ~3713):
 ```
 rotincr := 0.033 * $rotrate
 ```
 
-**DE Apollo Camera Length Conversion (Lines ~3084-3087):**
+**DE Apollo Camera Length Conversion (Lines ~3734-3737):**
 ```
 If $dist == 420
    apollodist := 560     ← ADJUST: Calibrate for your system
 ElseIf $dist == 960
    apollodist := 1280    ← ADJUST: Calibrate for your system
 ```
-Other camera lengths fall back to the nominal value (with a warning in the log). The same table is used by `BatchED_Main` (Lines ~735-738).
+Other camera lengths fall back to the nominal value (with a warning in the log). The same table is used by `BatchED_Main` (Lines ~795-798).
 
-**Ceta Movie Settings (Lines ~2788-2790):**
+**Ceta Movie Settings (Lines ~3708-3710):**
 ```
 SetContinuous R 1
 SetExposure R 3        ← ADJUST: Movie exposure time
 SetBinning R 2         ← ADJUST: Binning to achieve 2048x2048 images
 ```
 
-**DE Apollo Movie Settings (Lines ~3108-3111):**
+**DE Apollo Movie Settings (Lines ~3758-3761):**
 ```
 SetContinuous R 1
 SetExposure R $recordtime    ← Calculated from rotation parameters
@@ -202,9 +208,9 @@ SetBinning R 4               ← ADJUST: Binning to achieve 2048x2048 images
 SetFrameTime R $acqrate      ← Uses the frame time parameter
 ```
 
-### 5. Spot Size Check (DE Apollo suite only)
+### 5. Spot Size Check (Both Script Suites)
 
-`START_REYES` asks for the expected diffraction spot size (Setup_Helper, Line ~1278, default 8) and what to do on a mismatch (Line ~1288: 1 = abort the grid, 2 = warn and continue). `REyes_SpotGuard` checks it after switching to the Low Dose Record area in `REyes_STPSCN` and `REyes_DFMV`. The guard never changes the spot size. Low Dose must be on; otherwise StepScan and movie collection stop for that grid.
+`START_REYES` asks for the expected diffraction spot size (Setup_Helper; DE Apollo Line ~1338, default 8; Ceta Line ~1351, default 10) and what to do on a mismatch (DE Apollo Line ~1348, Ceta Line ~1358: 1 = abort the grid, 2 = warn and continue). `REyes_SpotGuard` checks it after switching to the Low Dose Record area in `REyes_STPSCN` and `REyes_DFMV`. The guard never changes the spot size. Low Dose must be on; otherwise StepScan and movie collection stop for that grid.
 
 → **Set the default in Setup_Helper to the spot size you use for diffraction**
 
@@ -212,14 +218,14 @@ SetFrameTime R $acqrate      ← Uses the frame time parameter
 
 All batched parameters (frame time, binning, tilt range, rotation rate, sweeps) are asked at run time. System-specific values:
 
-**Ceta (BatchED_Main_CETA, Lines ~645 and ~683-686; BatchED_Rotation_CETA, Lines ~1794-1797):**
+**Ceta (BatchED_Main_CETA, Lines ~770 and ~808-811; BatchED_Rotation_CETA, Lines ~2318-2321):**
 ```
 rotincr := 0.004 * ($rotrate / 0.3)   ← Calibrated for frame-saving overhead
 If $dist == 840
    cetadist := 790                    ← ADJUST: Calibrate for your system
 ```
 
-**DE Apollo (BatchED_Main, Lines ~698 and ~735-738):**
+**DE Apollo (BatchED_Main, Lines ~758 and ~795-798):**
 ```
 rotincr := $rotrate / 30
 If $dist == 420
@@ -232,21 +238,23 @@ If $dist == 420
 
 Frames are written by the DE server and copied into the session folder:
 
-**REyes_STPSCN (Line ~2827):**
+**REyes_STPSCN (Line ~3324; set-aside rename, Line ~3383):**
 ```
 RunInShell copy D:\DEOutput\Apollo\$samplename_$posname $set_directory\$samplename_$posname
+RunInShell cmd /c ren D:\DEOutput\Apollo\$samplename_$posname $samplename_$posname$sq_suffix
 ```
 
-**REyes_DFMV (Line ~3191):**
+**REyes_DFMV (Line ~3926; set-aside rename, Line ~4008):**
 ```
 RunInShell copy D:\DEOutput\Apollo\$movdir $set_directory\movies\$movdir
+RunInShell cmd /c ren D:\DEOutput\Apollo\$movdir $movdir$item_suffix
 ```
 
-**BatchED_Rotation, BatchED_Still, BatchED_MultiAngle, BatchED_Imaging (Lines ~2086, ~2169, ~2269, ~2340):**
+**BatchED_Rotation, BatchED_Still, BatchED_MultiAngle, BatchED_Imaging (Lines ~2360, ~2443, ~2543, ~2614):**
 ```
 RunInShell copy D:\DEOutput\Apollo\...
 ```
-→ Change `D:\DEOutput\Apollo\` to your DE camera output directory in all six places
+→ Change `D:\DEOutput\Apollo\` to your DE camera output directory in all eight places
 
 ### 2. Navigator File Paths (Both Scripts)
 
@@ -264,7 +272,7 @@ RunInShell copy D:\DEOutput\Apollo\...
 
 ### 3. Autoloader Slot Range (Macro: AutoloaderScreen)
 
-**Ceta (Lines ~2184-2185, default slots 3-6) / DE Apollo (Lines ~2355-2356, default slots 2-5):**
+**Ceta (Lines ~2704-2705, default slots 3-6) / DE Apollo (Lines ~2629-2630, default slots 2-5):**
 ```
 MinSlotNum := 3        ← ADJUST: first slot to image
 MaxSlotNum := 6        ← ADJUST: last slot to image
@@ -276,17 +284,18 @@ MaxSlotNum := 6        ← ADJUST: last slot to image
 ### Timing Parameters
 
 #### 1. Processing Wait Times (Macro: REyes_DFMV)
-**Ceta Script (Line ~2846, after each movie; Line ~2866, after the last movie):**
+**Ceta Script (Line ~3862, after each movie; Line ~3966, after the last movie):**
 ```
 Delay 120 sec
 Delay 900 sec          ← Optimized for REyes processing (do not adjust)
 ```
 
-**DE Apollo Script (Lines ~3058-3059):**
+**DE Apollo Script (Lines ~3702-3708):**
 ```
-dfmv_write_settle = 5  ← Wait after each movie before copying frames (raise if a movie folder is copied short)
-dfmv_tail_settle = 20  ← Wait after the last movie
+dfmv_write_settle := 5  ← Wait after each movie before copying frames (raise if a movie folder is copied short)
+dfmv_tail_settle := 20  ← Wait after the last movie
 ```
+Both are set only if not already defined, so they can be overridden by setting them before `REyes_DFMV` runs.
 
 #### 2. Stage Movement Delays (Both Scripts)
 **Various locations in multiple macros:**
@@ -296,6 +305,8 @@ Delay 2 sec            ← Optimized for system stability (do not adjust)
 ```
 
 > **NOTE:** These delays are optimized for reliable operation and should not need adjustment.
+
+**Stage-safe moves, both suites (REyes_ECNT, REyes_STPSCN, REyes_DFMV):** before each navigator move the macro waits for the stage to be idle, and a refused move is retried up to 5 times, 20 s apart (`STAGE_RETRY` in the log). If the stage still refuses, `REyes_ECNT` stops; `REyes_STPSCN` and `REyes_DFMV` set that grid square or crystal aside and go on.
 
 ### Validation Ranges
 

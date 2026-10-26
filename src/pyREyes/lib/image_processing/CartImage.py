@@ -566,50 +566,6 @@ class CartImage:
         return updated_img
 
 
-    def get_cross_correlation(self, image2):
-        """
-        Computes the cross-correlation between the interpolated image from self onto image2.
-
-        Steps:
-        1. Compute the intersection polygon between self and image2.
-        2. Interpolate self onto image2 within this polygon.
-        3. Use the existing compute_cross_correlation function.
-
-        Args:
-            image2 (CartImage): The second image to compare.
-
-        Returns:
-            float: The cross-correlation coefficient, or None if no valid intersection.
-        """
-        # Step 1: Get the intersection polygon
-        intersection_polygon, _ = self.get_intersection_polygon_and_area(image2)
-
-        if intersection_polygon is None:
-            return None  # No valid intersection
-
-        # Step 2: Interpolate self onto image2 within the intersection polygon
-        interpolated_img = image2.interpolate_onto(self, intersection_polygon)
-        # _, _, _ = image2.interpolate_onto_grid_fast(intersection_polygon)
-
-        
-        # Step 3: Extract only the valid pixels inside the polygon from both images
-        transformed_matrix1, _ = self.get_image_in_polygon(intersection_polygon)
-        valid_mask = transformed_matrix1[:, :, 2] > 0  # Only pixels inside the polygon
-
-        # Ensure we have enough valid pixels to compute correlation
-        if np.sum(valid_mask) == 0:
-            return None
-
-        # Keep the 2D structure by masking instead of flattening
-        img1_valid = np.where(valid_mask, self.img, 0)
-        img2_valid = np.where(valid_mask, interpolated_img, 0)
-
-        # Step  4: Compute NCC
-        NCC = compute_similarity(img1_valid, img2_valid)
-        print(NCC)
-        return NCC
-
-
     # ---------------------------
     # Intersection with other Images
 

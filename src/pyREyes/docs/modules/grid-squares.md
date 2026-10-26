@@ -1,6 +1,6 @@
 # REyes Grid Squares Searcher (GSS)
 
-**Part of pyREyes v3.4.10** - Automated MicroED diffraction data collection and analysis package
+**Part of pyREyes v3.6.0** - Automated MicroED diffraction data collection and analysis package
 
 The Grid Squares Searcher processes diffraction data from **grid squares**, enabling automated detection and navigation generation based on montage data collected from supported microscopes. This tool is the first step in the REyes automated MicroED workflow.
 

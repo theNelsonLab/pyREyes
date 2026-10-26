@@ -1,6 +1,6 @@
 # REyes Final Targets Processor (FTP)
 
-**Part of pyREyes v3.4.10** - Final target combination and spatial filtering tool
+**Part of pyREyes v3.6.0** - Final target combination and spatial filtering tool
 
 Combines multiple navigation files into a final target list while ensuring proper spatial distribution with minimum separation distances.
 
@@ -53,6 +53,7 @@ create-final-targets-4
 | `--tolerance` | float | `10.1` | Minimum distance between targets (microns) |
 | `--input-files` | list | *auto* | Custom input navigation files (category mode) |
 | `--target-lists` | list | `sum peaks dqi` | Target lists for block mode: `sum`, `peaks`, `dqi` (1-3 values). Applies only with `--top-target-per-block` |
+| `--beam-center` | string | `auto` | Centre of the resolution rings: `auto` finds the direct beam, `frame` uses the middle of the frame, or `X,Y` in pixels (block mode snapshots; see the *Beam centre* section of [navigation.md](navigation.md)) |
 
 ---
 
@@ -62,7 +63,7 @@ create-final-targets-4
 - **`targets.nav`** - Combined final navigation file with spatial filtering
 
 ### Visualization Directories (block mode only)
-- **`targets/targets_per_block_diff_snapshots/`** - Diffraction patterns for selected targets
+- **`targets/targets_per_block_diff_snapshots/`** - Diffraction patterns for selected targets, with `beam_center.json` (the beam centre the resolution rings were drawn about)
 
 ### Log Files
 - **`REyes_logs/processing.log`** - Detailed selection process and skip reasons
@@ -77,6 +78,7 @@ create-final-targets-4
 ### 2. Selection Modes
 - **Category Mode**: Selects top N from each source (nXDS → quality → spots → sum)
 - **Block Mode**: Selects top N per diffraction block with quality ranking
+- Ties in the ranking keep the block order (stable sort), so the same data give the same targets on every machine
 
 ### 3. Spatial Validation
 - Calculates distances between targets and enforces minimum separation tolerance

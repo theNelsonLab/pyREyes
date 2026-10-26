@@ -3,10 +3,12 @@ REyes Monitor
 Monitoring tool for REyes processing scripts to automate the workflow.
 """
 
+import json
 import os
 import signal
 import time
 import logging
+from datetime import datetime, timezone
 from subprocess import (DEVNULL, PIPE, CompletedProcess, Popen, SubprocessError,
                         TimeoutExpired, run)
 import re
@@ -19,7 +21,13 @@ from pathlib import Path
 
 
 from pyREyes.lib.ui.REyes_ui import print_banner
+from pyREyes.lib.REyes_autoproc import (
+    AUTOPROCESS_ARTEFACTS as _AUTOPROCESS_ARTEFACTS,
+    AUTOPROCESS_FLAG as _AUTOPROCESS_FLAG,
+    mark_done as _mark_done,
+    produced_output, run_for_movie)
 from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs
+from pyREyes.lib import REyes_serialem as serialem
 
 MICROSCOPE_CONFIGS = load_microscope_configs()
 
@@ -37,6 +45,45 @@ DEFAULT_POLL_INTERVAL = 5
 # Values a state handler returns to the monitor loop (compared by identity).
 STOP = object()        # monitoring is finished; monitor() returns
 SKIP_DELAY = object()  # go straight round the loop without the polling delay
+
+# How long a monitor waiting on SerialEM may see nothing new arrive before it
+# stops and says so (--idle-timeout). 0 = never, as in 3.4.10 and earlier. A
+# backstop, not a schedule: a SerialEM abort is read from the logs directly
+# (see REyes_serialem.AbortWatch); this only catches what that cannot, such as
+# a microscope PC that stopped mid-stage.
+DEFAULT_IDLE_TIMEOUT = 0
+
+# Entries of a session root that the MONITOR writes. Their changes are not
+# arrivals from the microscope, so they never reset the idle clock.
+MONITOR_OWNED = frozenset({
+    'REyes_logs', 'dif_maps', 'targets', 'reyes_temp', 'grid_squares',
+    'session_status.json', '.DS_Store',
+})
+
+
+class MonitorTerminated(KeyboardInterrupt):
+    """SIGTERM, raised where the monitor was so its `finally` still runs."""
+
+
+def install_sigterm_handler(processor):
+    """Make a SIGTERM (e.g. `kill`) leave a verdict on disk.
+
+    Python's default for SIGTERM is to exit on the spot, skipping every
+    `finally`, so session_status.json would never be written by exactly the
+    runs that most need one. Raising here instead unwinds through monitor(),
+    whose `finally` writes `interrupted` with the reason.
+    """
+    def _on_sigterm(signum, frame):
+        state = getattr(getattr(processor, 'state', None), 'name', '?')
+        processor.stop_reason = f'SIGTERM received in state {state}'
+        raise MonitorTerminated(processor.stop_reason)
+
+    try:
+        signal.signal(signal.SIGTERM, _on_sigterm)
+    except (ValueError, OSError, AttributeError):
+        # Not the main thread, or a platform without SIGTERM: nothing to do.
+        return False
+    return True
 
 
 def _kill_process_tree_windows(pid):
@@ -80,9 +127,14 @@ def run_with_timeout(cmd, cwd=None, timeout=None):
     subprocess.run's own `timeout=` kills only the direct child, which is not
     enough here (see _kill_process_group). Raises TimeoutExpired on expiry,
     exactly as subprocess.run would, after the process group has been killed.
+
+    Stages get MPLBACKEND=Agg: a monitor started over ssh -X has DISPLAY set,
+    matplotlib may then pick TkAgg, and Tk can abort the stage on exit
+    ("Tcl_AsyncDelete: async handler deleted by the wrong thread").
     """
+    env = dict(os.environ, MPLBACKEND='Agg')
     process = Popen(cmd, cwd=cwd, stdout=PIPE, stderr=PIPE, text=True,
-                    start_new_session=True)
+                    start_new_session=True, env=env)
     try:
         stdout, stderr = process.communicate(timeout=timeout)
     except TimeoutExpired:
@@ -108,8 +160,35 @@ class CustomHelpFormatter(argparse.HelpFormatter):
             return text.splitlines()
         return super()._split_lines(text, width)
 
-__version__ = '3.4.10'
+__version__ = '3.6.0'
 __min_required_version__ = '3.4.0'
+
+# The movie log, and the logs SerialEM writes when the movie stage is re-entered
+# (`<sample>_targets-1.log`, ...): the movies a resumed stage announces are as
+# real as the first ones.
+_MOVIE_LOG_RE = re.compile(r'.+_targets(?:-\d+)?\.log$')
+
+# Waits on SerialEM in which an abort stops the monitor at once. The step-scan
+# and movie waits handle an abort themselves, after finishing what has already
+# arrived.
+ABORT_STATES = frozenset({ProcessingState.WAITING_FOR_MONTAGE,
+                          ProcessingState.WAITING_FOR_GRID_SQUARES})
+
+# States in which the monitor waits on SerialEM, not on itself (--idle-timeout).
+IDLE_STATES = frozenset({ProcessingState.WAITING_FOR_MONTAGE,
+                         ProcessingState.WAITING_FOR_GRID_SQUARES,
+                         ProcessingState.WAITING_FOR_DIFFRACTION_MAP,
+                         ProcessingState.WAITING_FOR_MOVIES})
+
+# The `record` of a block the monitor itself sets aside in set_aside_items.json
+# (SerialEM's own set-asides carry the log record, e.g. BLOCK_SKIPPED).
+MONITOR_SET_ASIDE = 'MONITOR_SET_ASIDE'
+
+# Polls a block may stay unfinished, while a later block's log already exists,
+# before it is set aside: logs written by the acquisition PC can appear out of
+# order on a network share.
+MISSING_BLOCK_POLLS = 3
+
 
 class REyesProcessor:
     def __init__(self,
@@ -126,8 +205,10 @@ class REyesProcessor:
              stepscan_only=False,
              montage_only=False,
              subprocess_timeout=DEFAULT_SUBPROCESS_TIMEOUT,
+             movie_timeout=None,
              autosolve_timeout=None,
              poll_interval=DEFAULT_POLL_INTERVAL,
+             idle_timeout=DEFAULT_IDLE_TIMEOUT,
              # Autoprocess parameters
              autoprocess=False,
              microscope_config=None,
@@ -194,6 +275,31 @@ class REyesProcessor:
         self.autosolve_timeout = autosolve_timeout
         self.poll_interval = poll_interval
         self.processed_logs = set()
+
+        # --- the ways a session ends without its success phrases ----------- #
+        # 0/None switches the idle backstop off.
+        self.idle_timeout = idle_timeout or None
+        self._idle_clock = None          # (signature, monotonic time, state)
+        self._status_written = False
+        self.stop_reason = None          # set by the SIGTERM handler
+        # An abort counts until SerialEM demonstrably resumed after it (a newer
+        # log of this grid; see REyes_serialem.AbortWatch). Its age relative to
+        # this monitor does not matter: a session processed after the fact, or
+        # a monitor started late, must still end with SerialEM's verdict, and a
+        # monitor restarted before SerialEM resumes a grid stops with that
+        # verdict -- restart it once the resume has begun.
+        self._abort_watch = serialem.AbortWatch(self.working_directory)
+        self.serialem_abort = None       # what AbortWatch found, once found
+        # Step-scan blocks SerialEM set aside (valve, error), and those the
+        # monitor gave up on because SerialEM had moved past them.
+        self.skipped_blocks = {}
+        self.completion_detail = 'movies processed'
+        self.processed_blocks = []
+        # A monitor restarted at a later block (--current-block) did not map
+        # the earlier blocks itself; the map an earlier run wrote says they were.
+        self._mapped_before_start = current_block > 1 and os.path.isfile(
+            os.path.join(self.working_directory, 'dif_maps', 'dif_map_sums.csv'))
+        self._missing_block_ticks = 0
         self.state = ProcessingState[start_state] if start_state else ProcessingState.WAITING_FOR_MONTAGE
 
         self.nav_pattern = re.compile(r'(.+)_(\d+)LM_(\d+)x(\d+)_nav\.nav$')
@@ -250,6 +356,11 @@ class REyesProcessor:
         
         self.processed_movies = set()
         self.movies_count = 0
+        # Autoprocess of one movie has its own wall-clock limit, so it can be
+        # set apart from the stages' --subprocess-timeout. None = the same
+        # limit as the stages, as in 3.4.10 and earlier.
+        self.movie_timeout = (movie_timeout if movie_timeout is not None
+                              else subprocess_timeout)
         self.movies_directory = os.path.join(self.working_directory, 'movies')
         
         self.logger.info(f"Initializing with state: {self.state.name}")
@@ -368,21 +479,27 @@ class REyesProcessor:
                 f not in self.processed_logs]
     
     def find_diffraction_map_logs(self, nav_info):
-        """Find diffraction map log files for current block"""
-        block_log = f"{nav_info['prefix']}_{self.current_block}.log"
-        log_path = os.path.join(self.working_directory, block_log)
-        
-        if os.path.exists(log_path) and block_log not in self.processed_logs:
+        """The current block's log, if it has not been dealt with yet.
+
+        A square mapped again after a resume has a newer log beside the
+        original (`<prefix>_<N>-1.log`, ...); the newest one is the block's log.
+        """
+        block_log = self._block_logs(nav_info['prefix']).get(self.current_block)
+        if block_log and block_log not in self.processed_logs:
             return [block_log]
         return []
     
     def find_movie_logs(self):
-        """Find movie acquisition log file"""
-        movie_logs = [f for f in os.listdir(self.working_directory) 
-                    if f.endswith('_targets.log') and 
-                    f not in self.processed_logs]
-        #self.logger.info(f"Found movie log files: {movie_logs}")
-        return movie_logs
+        """The movie logs, originals before their resume logs.
+
+        `<sample>_targets.log`, then `<sample>_targets-1.log`, ... -- a resumed
+        movie stage writes a new log, and the movies it announces are as real
+        as the first ones.
+        """
+        movie_logs = [f for f in os.listdir(self.working_directory)
+                      if _MOVIE_LOG_RE.match(f) and
+                      f not in self.processed_logs]
+        return serialem.ordered_logs(movie_logs)
     
     def find_new_movies(self, log_file):
         """Find newly acquired movies from the targets log file"""
@@ -623,7 +740,7 @@ class REyesProcessor:
                         if os.path.exists(mdoc_source):
                             self.logger.info(f"Renaming {mdoc_source} → {mdoc_target}")
                             os.rename(mdoc_source, mdoc_target)
-                            self.logger.info(f"Successfully renamed .mdoc file")
+                            self.logger.info("Successfully renamed .mdoc file")
 
                         # Rename associated .txt file if it exists
                         # Check for both possible txt file patterns: {base}_info.txt and {base}.txt
@@ -634,11 +751,11 @@ class REyesProcessor:
                         if os.path.exists(txt_source_info):
                             self.logger.info(f"Renaming {txt_source_info} → {txt_target}")
                             os.rename(txt_source_info, txt_target)
-                            self.logger.info(f"Successfully renamed _info.txt file")
+                            self.logger.info("Successfully renamed _info.txt file")
                         elif os.path.exists(txt_source_plain):
                             self.logger.info(f"Renaming {txt_source_plain} → {txt_target}")
                             os.rename(txt_source_plain, txt_target)
-                            self.logger.info(f"Successfully renamed .txt file")
+                            self.logger.info("Successfully renamed .txt file")
                     else:
                         # Fallback if no suffix matched
                         self.logger.info(f"Renaming {movie_path} → {target_path}")
@@ -700,51 +817,18 @@ class REyesProcessor:
 
 
                 self.logger.info(f"Running autoprocess command: {' '.join(cmd)}")
-                
-                # Run the command and capture output
-                try:
-                    result = run_with_timeout(cmd, cwd=movie_dir,
-                                              timeout=self.subprocess_timeout)
 
-                    # Print stdout directly without logger formatting
-                    if result.stdout:
-                        self.logger.info(f"Autoprocess stdout:\n{result.stdout}")
-
-                    # Print stderr directly without logger formatting
-                    if result.stderr:
-                        self.logger.warning(f"Autoprocess stderr:\n{result.stderr}")
-
-                    if result.returncode == 0:
-                        # Exit status 0 is not enough: autoprocess can exit 0
-                        # without processing anything (e.g. a --microscope-config
-                        # that does not match the movie format). Require its
-                        # output on disk.
-                        produced = self._autoprocess_produced_output(movie_dir)
-                        if not produced:
-                            self.logger.error(
-                                f"Autoprocess exited 0 but produced no output in "
-                                f"{movie_dir} for {movie_info['acquired_name']}. "
-                                f"Treating as a failure: a zero exit with nothing "
-                                f"processed is what a missing --microscope-config "
-                                f"looks like.")
-                            return False
-                        # Record completion so a restarted monitor skips it.
-                        self._mark_movie_done(movie_dir)
-                        self.logger.info(f"Successfully processed movie {movie_info['acquired_name']}")
-                        return True
-                    else:
-                        self.logger.error(f"Autoprocess failed with return code {result.returncode}")
-                        return False
-                except TimeoutExpired:
-                    self.logger.error(
-                        f"Autoprocess for movie {movie_info['acquired_name']} exceeded "
-                        f"the {self.subprocess_timeout}s timeout and its process group "
-                        f"was killed; moving on to the next movie"
-                    )
-                    return False
-                except Exception as e:
-                    self.logger.error(f"Error running autoprocess: {str(e)}")
-                    return False
+                ok, note = run_for_movie(
+                    cmd, movie_dir, self.movie_timeout, run_with_timeout,
+                    logger=self.logger)
+                if ok:
+                    self.logger.info(
+                        f"Successfully processed movie "
+                        f"{movie_info['acquired_name']}")
+                    return True
+                self.logger.error(
+                    f"Movie {movie_info['acquired_name']}: {note}")
+                return False
             else:
                 self.logger.info(f"Skipping autoprocess for movie {movie_info['acquired_name']} (autoprocess disabled)")
             
@@ -761,19 +845,21 @@ class REyesProcessor:
     # enough: which ones appear depends on how far XDS got, and a movie that
     # failed to index is still a processed movie. The check is "did it run at
     # all", not "did it succeed".
-    AUTOPROCESS_ARTEFACTS = ('XDS.INP', 'CORRECT.LP', 'IDXREF.LP',
-                             'XDS_ASCII.HKL', 'autoprocess_logs')
+    AUTOPROCESS_ARTEFACTS = _AUTOPROCESS_ARTEFACTS
 
-    # Written by the monitor in the movie folder after autoprocess succeeds.
-    AUTOPROCESS_FLAG = 'autoprocess_done.flag'
+    # Written by the monitor in the movie folder once the movie is finished
+    # with: after autoprocess succeeds, or when it is abandoned (its content
+    # then says why).
+    AUTOPROCESS_FLAG = _AUTOPROCESS_FLAG
 
     def _movie_already_done(self, movie_dir, acquired_name):
         """True if this movie has already been handled, judged from disk.
 
         With --autoprocess, a movie is done when autoprocess_done.flag exists
         in its folder. The monitor writes the flag only after autoprocess exits
-        0 and its output is found on disk. Without --autoprocess, the renamed
-        movie file marks completion.
+        0 and its output is found on disk, or when the movie exceeded
+        --movie-timeout. Without --autoprocess, the renamed movie file marks
+        completion.
 
         XDS output files alone are not used as the marker: an unindexable movie
         never writes CORRECT.LP, and autoprocess_logs is created before XDS
@@ -787,29 +873,17 @@ class REyesProcessor:
                                                self.AUTOPROCESS_FLAG))
         return os.path.isfile(os.path.join(movie_dir, acquired_name))
 
-    def _mark_movie_done(self, movie_dir):
+    def _mark_movie_done(self, movie_dir, note='autoprocess complete'):
         """Record that autoprocess finished this movie, for a later restart."""
-        try:
-            with open(os.path.join(movie_dir, self.AUTOPROCESS_FLAG), 'w',
-                      newline='\n') as handle:
-                handle.write('autoprocess complete\n')
-        except OSError as exc:
+        if not _mark_done(movie_dir, note):
             # Not fatal: the movie is processed. Without the flag a restart
             # processes it again.
             self.logger.warning(f"could not write {self.AUTOPROCESS_FLAG} in "
-                                f"{movie_dir}: {exc}")
+                                f"{movie_dir}")
 
     def _autoprocess_produced_output(self, movie_dir):
         """True if autoprocess left anything behind in or under `movie_dir`."""
-        try:
-            for root, dirs, files in os.walk(movie_dir):
-                present = set(files) | set(dirs)
-                if present & set(self.AUTOPROCESS_ARTEFACTS):
-                    return True
-        except OSError:
-            # Cannot be verified, so do not report success.
-            return False
-        return False
+        return produced_output(movie_dir, self.AUTOPROCESS_ARTEFACTS)
 
     def run_autosolve(self):
         def stream_reader(pipe, log_func):
@@ -891,6 +965,7 @@ class REyesProcessor:
                     'filtering': self.filtering
                 }):
                     if self.montage_only:
+                        self.completion_detail = 'montage only'
                         self.state = ProcessingState.COMPLETED
                         self.logger.info("REyes processing completed! (Montage only)")
                         return STOP
@@ -921,18 +996,108 @@ class REyesProcessor:
                     self.logger.info("Moving to diffraction map monitoring state")
         return None
 
+    # --------------------------------------------------------- step-scan #
+    # A block advances on "completed stepscan for current grid square". A
+    # block that never says it (the column valve closed mid-square, or any
+    # error SerialEM set aside) used to hold the monitor at that block for
+    # ever, and the blocks after it were never mapped. The rule: a failed block
+    # loses only that block; the grid goes on to targets with whatever blocks
+    # succeeded, even if only one did.
+    def _log_text(self, log_file):
+        return serialem.read_text(os.path.join(self.working_directory, log_file))
+
+    def _block_logs(self, prefix):
+        """{block number: its newest log} for `<prefix>_<N>.log` / `<prefix>_<N>-k.log`."""
+        pattern = re.compile(rf'^{re.escape(prefix)}_(\d+)(?:-\d+)?\.log$')
+        found = {}
+        for name in os.listdir(self.working_directory):
+            m = pattern.match(name)
+            if m:
+                found.setdefault(int(m.group(1)), []).append(name)
+        return {block: serialem.ordered_logs(names)[-1]
+                for block, names in found.items()}
+
+    def _block_log_numbers(self, prefix):
+        return list(self._block_logs(prefix))
+
+    @staticmethod
+    def _block_folder(log_file):
+        """The block's data folder: its log name without `.log` or a resume `-k`."""
+        return re.sub(r'(?:-\d+)?\.log$', '', log_file)
+
+    def _blocks_mapped(self):
+        """True when at least one step-scan block has been mapped this session,
+        by this monitor or by an earlier one (a restart with --current-block)."""
+        return bool(self.processed_blocks) or self._mapped_before_start
+
+    def _set_aside_block(self, block, reason, log_file, source='serialem',
+                         record='BLOCK_SKIPPED'):
+        """Record a block that will never be mapped, and say so once."""
+        if block in self.skipped_blocks:
+            return
+        self.skipped_blocks[block] = {'reason': reason, 'log': log_file}
+        self.logger.warning(f"BLOCK SET ASIDE | block={block} | reason={reason} "
+                            f"| log={log_file} -- this block is lost, the grid "
+                            f"goes on with the others")
+        self._record_set_aside([serialem.make_entry(
+            'STPSCN', block, reason, source, record, log=log_file)])
+
+    def _record_set_aside(self, entries):
+        try:
+            return serialem.record_set_aside(
+                os.path.join(self.working_directory, 'targets'), entries)
+        except OSError as exc:
+            self.logger.error(f"could not update the set-aside list: {exc}")
+            return []
+
+    def _after_block(self, log_file):
+        """A block is settled (mapped or set aside): next block, or the end."""
+        self._missing_block_ticks = 0
+        if self.check_all_maps_completion(log_file):
+            self.state = ProcessingState.GENERATING_TARGETS
+            self.logger.info("All diffraction map blocks completed, moving to target generation")
+            return
+        result = serialem.stpscn_result(self._log_text(log_file))
+        if result is not None:
+            self._end_of_stepscan(result, log_file)
+            return
+        self.current_block += 1
+        self.logger.info(f"Moving to next block: {self.current_block}")
+
+    def _end_of_stepscan(self, result, log_file):
+        """SerialEM ended the step-scan without the all-squares phrase."""
+        lost = sorted(self.skipped_blocks)
+        if result == 'failed' or not self._blocks_mapped():
+            return self._halt(
+                f"The step-scan ended with no block mapped (result={result}, "
+                f"{log_file}).",
+                f"Blocks set aside: {lost or 'none recorded'}.",
+                reason='stepscan_failed')
+        self.logger.warning(
+            f"STEP-SCAN ENDED {result.upper()} in {log_file}: "
+            f"{len(self.processed_blocks)} block(s) mapped by this monitor, set aside: "
+            f"{lost or 'none'}. Generating targets from the mapped blocks.")
+        self.state = ProcessingState.GENERATING_TARGETS
+        return None
+
     def _handle_waiting_for_diffraction_map(self):
         self.logger.debug(f"Waiting for diffraction map block {self.current_block} completion...")
         nav_info_list = self.find_nav_files()
+        progressed = False
 
         for nav_info in nav_info_list:
+            if self.state != ProcessingState.WAITING_FOR_DIFFRACTION_MAP:
+                break
             diffraction_logs = self.find_diffraction_map_logs(nav_info)
 
             for log_file in diffraction_logs:
+                text = self._log_text(log_file)
+                skip = serialem.block_skip(text, self.current_block)
                 # First check if current block is complete and process it
-                if self.check_diffraction_map_completion(log_file):
+                if skip is None and self.check_diffraction_map_completion(log_file):
                     self.processed_logs.add(log_file)
-                    folder_name = log_file.replace(".log", "")
+                    folder_name = self._block_folder(log_file)
+                    progressed = True
 
                     success = self.run_module('dif_map', {
                         'microscope': self.microscope,
@@ -942,15 +1107,111 @@ class REyesProcessor:
                     })
 
                     if success:
-                        if self.check_all_maps_completion(log_file):
-                            self.state = ProcessingState.GENERATING_TARGETS
-                            self.logger.info("All diffraction map blocks completed, moving to target generation")
-                        else:
-                            self.current_block += 1
-                            self.logger.info(f"Moving to next block: {self.current_block}")
+                        self.processed_blocks.append(self.current_block)
                     else:
                         self.logger.warning(f"Failed to process {folder_name}, skipping to next block")
-                        self.current_block += 1
+                    self._after_block(log_file)
+
+                elif skip is not None:
+                    # SerialEM set this block aside (BLOCK_SKIPPED, or the
+                    # older VALVE_CLOSED). Its frames were never copied:
+                    # nothing to map.
+                    self.processed_logs.add(log_file)
+                    progressed = True
+                    self._set_aside_block(self.current_block, skip[0], log_file,
+                                          record=skip[1])
+                    self._after_block(log_file)
+
+                elif any(n > self.current_block for n in
+                         self._block_log_numbers(nav_info['prefix'])):
+                    # SerialEM has opened a later block's log, so this one is
+                    # final -- and it never said the block finished. A few
+                    # polls first (see MISSING_BLOCK_POLLS).
+                    self._missing_block_ticks += 1
+                    if self._missing_block_ticks < MISSING_BLOCK_POLLS:
+                        continue
+                    self._missing_block_ticks = 0
+                    self.processed_logs.add(log_file)
+                    progressed = True
+                    self._set_aside_block(self.current_block,
+                                          'no_completion_phrase', log_file,
+                                          source='pyreyes', record=MONITOR_SET_ASIDE)
+                    self._after_block(log_file)
+
+            if not diffraction_logs and \
+                    self.state == ProcessingState.WAITING_FOR_DIFFRACTION_MAP:
+                outcome = self._current_block_absent(nav_info)
+                if outcome is STOP:
+                    return STOP
+                progressed = progressed or outcome is SKIP_DELAY
+
+        if self.state == ProcessingState.WAITING_FOR_DIFFRACTION_MAP and not progressed:
+            found = self._check_serialem_abort()
+            if found:
+                if self._blocks_mapped():
+                    self.logger.warning(
+                        f"{serialem.describe_abort(found)}. Generating targets "
+                        f"and maps from the mapped block(s); the session will "
+                        f"end failed, since no movies will follow.")
+                    self.state = ProcessingState.GENERATING_TARGETS
+                    return SKIP_DELAY
+                return self._halt(serialem.describe_abort(found),
+                                  "No step-scan block was mapped.",
+                                  reason='serialem_aborted')
+        return None
+
+    def _current_block_absent(self, nav_info):
+        """The current block has no log (yet). Was it skipped, or was the last
+        block before it the end of the stage?
+
+        Read in the LATEST block log that exists (normally the previous block's):
+        - `BLOCK_SKIPPED | square=<this block>` is written there when the square
+          failed before opening its own log -- set aside, move on;
+        - the save-order race: SerialEM writes "completed stepscan for current
+          grid square" and the all-squares phrase in two saves; a monitor that
+          read between them moved to a block that will never exist;
+        - the stage ended early ("StepScan incomplete", or STPSCN_RESULT).
+        And one robustness case: a LATER block's log exists while this one has
+        none and nothing says why. After MISSING_BLOCK_POLLS polls it is set
+        aside.
+        """
+        prefix = nav_info['prefix']
+        logs = self._block_logs(prefix)
+        numbers = list(logs)
+        earlier = [n for n in numbers if n < self.current_block]
+        if earlier:
+            latest = logs[max(earlier)]
+            text = self._log_text(latest)
+            skip = serialem.block_skip(text, self.current_block)
+            if skip is not None:
+                self._missing_block_ticks = 0
+                self._set_aside_block(self.current_block, skip[0], latest,
+                                      record=skip[1])
+                self._after_block(latest)
+                return SKIP_DELAY
+            if self.check_all_maps_completion(latest):
+                self.logger.info(f"The all-squares phrase is in {latest}; "
+                                 f"block {max(earlier)} was the last")
+                self.state = ProcessingState.GENERATING_TARGETS
+                self.logger.info("All diffraction map blocks completed, moving to target generation")
+                return SKIP_DELAY
+            result = serialem.stpscn_result(text)
+            if result is not None:
+                outcome = self._end_of_stepscan(result, latest)
+                return STOP if outcome is STOP else SKIP_DELAY
+
+        if any(n > self.current_block for n in numbers):
+            self._missing_block_ticks += 1
+            if self._missing_block_ticks >= MISSING_BLOCK_POLLS:
+                self._missing_block_ticks = 0
+                self._set_aside_block(self.current_block, 'no_log',
+                                      f"{prefix}_{self.current_block}.log",
+                                      source='pyreyes', record=MONITOR_SET_ASIDE)
+                self.current_block += 1
+                self.logger.info(f"Moving to next block: {self.current_block}")
+                return SKIP_DELAY
+        else:
+            self._missing_block_ticks = 0
         return None
 
     def _handle_generating_targets(self):
@@ -960,9 +1221,11 @@ class REyesProcessor:
         dif_map_csv = Path(self.working_directory) / "dif_maps" / "dif_map_sums.csv"
 
         if not dif_map_csv.exists():
-            self.logger.error("Diffraction mapping results not found (dif_maps/dif_map_sums.csv missing)")
-            self.state = ProcessingState.COMPLETED
-            return STOP
+            # A session with no map is a failure, not a completion; it is what
+            # a grid whose every block was set aside looks like.
+            return self._halt("Diffraction mapping results not found "
+                              "(dif_maps/dif_map_sums.csv missing)",
+                              reason='no_diffraction_map')
 
         # Check for viable targets (Good or Bad diffraction)
         try:
@@ -1003,9 +1266,8 @@ class REyesProcessor:
                         self.logger.info("Moving to final map generation state")
 
         except Exception as e:
-            self.logger.error(f"Error checking diffraction results: {str(e)}")
-            self.state = ProcessingState.COMPLETED
-            return STOP
+            return self._halt(f"Error checking diffraction results: {str(e)}",
+                              reason='target_generation_error')
         return None
 
     def _handle_generating_final_map(self):
@@ -1014,6 +1276,7 @@ class REyesProcessor:
                 'microscope': self.microscope
             }):
             if self.stepscan_only:
+                self.completion_detail = 'step-scan only'
                 self.state = ProcessingState.COMPLETED
                 self.logger.info("REyes processing completed! (Step scan only)")
                 return STOP
@@ -1023,40 +1286,78 @@ class REyesProcessor:
                 self.logger.debug("Monitoring for new movies...")
         return None
 
+    def _note_movie_set_asides(self, movie_logs):
+        """Movies SerialEM set aside (ITEM_SKIPPED / VALVE_CLOSED, stage DFMV).
+
+        Nothing waits on them -- a set-aside movie is never announced with
+        `Movie folder:` / `Acquired movie:` -- so this is bookkeeping: say so
+        once, and keep them in the set-aside list.
+        """
+        paths = [os.path.join(self.working_directory, f) for f in movie_logs]
+        skipped = serialem.skipped_items(paths, ('DFMV',))
+        entries = [serialem.make_entry('DFMV', item, info['reason'], 'serialem',
+                                       info['record'], log=info['log'])
+                   for item, info in sorted(skipped.items())]
+        for entry in self._record_set_aside(entries):
+            self.logger.warning(f"MOVIE SET ASIDE by SerialEM | item={entry['item']} "
+                                f"| reason={entry['reason']} | log={entry.get('log')}")
+
     def _handle_waiting_for_movies(self):
         self.logger.debug("Waiting for the next tilt dataset...")
         movie_logs = self.find_movie_logs()
 
+        # Every movie log first -- the original and any resume logs -- so a
+        # resumed movie stage's movies are processed before the end phrase is
+        # believed.
+        processed_now = 0
         for log_file in movie_logs:
-            # Find any new movies
-            new_movies = self.find_new_movies(log_file)
-
-            # Process each new movie
-            for movie_info in new_movies:
+            for movie_info in self.find_new_movies(log_file):
+                processed_now += 1
                 if self.process_movie(movie_info):
                     self.logger.info(f"Successfully processed movie {self.movies_count}")
                 else:
                     self.logger.error(f"Failed to process movie: {movie_info['acquired_name']}")
 
-            # Check if all movies are completed
-            if self.check_all_targets_completion(log_file):
-                # Trigger phrase found, but do a final check for new movies
-                # that may have been added to the log during processing
-                self.logger.debug("Completion trigger found, performing final check for new movies...")
-                final_check = self.find_new_movies(log_file)
+        if movie_logs:
+            self._note_movie_set_asides(movie_logs)
 
-                if len(final_check) == 0:
-                    # No new movies AND trigger found - safe to exit
-                    if self.autosolve:
-                        self.state = ProcessingState.RUNNING_AUTOSOLVE
-                        self.logger.info(f"All movies processed ({self.movies_count} total). Starting AutoSolve.")
-                    else:
-                        self.state = ProcessingState.COMPLETED
-                        self.logger.info(f"All movies processed ({self.movies_count} total). Sample to Indexing completed.")
-                        return STOP
+        # The end phrase counts in the LATEST movie log: a resumed stage's log
+        # supersedes the original's.
+        if movie_logs and self.check_all_targets_completion(movie_logs[-1]):
+            # Trigger phrase found, but do a final check for new movies
+            # that may have been added to the log during processing
+            self.logger.debug("Completion trigger found, performing final check for new movies...")
+            final_check = [m for log_file in movie_logs
+                           for m in self.find_new_movies(log_file)]
+
+            if len(final_check) == 0:
+                # No new movies AND trigger found - safe to exit
+                if not self.movies_count:
+                    # The movie macro prints the end phrase even when no movie
+                    # was collected, and then fails the grid: say so.
+                    self._check_serialem_abort()
+                if self.autosolve:
+                    self.state = ProcessingState.RUNNING_AUTOSOLVE
+                    self.logger.info(f"All movies processed ({self.movies_count} total). Starting AutoSolve.")
                 else:
-                    # New movies found after completion trigger - continue processing
-                    self.logger.info(f"Completion trigger found, but {len(final_check)} new movie(s) detected. Continuing processing...")
+                    self.state = ProcessingState.COMPLETED
+                    self.logger.info(f"All movies processed ({self.movies_count} total). Sample to Indexing completed.")
+                    return STOP
+            else:
+                # New movies found after completion trigger - continue processing
+                self.logger.info(f"Completion trigger found, but {len(final_check)} new movie(s) detected. Continuing processing...")
+            return None
+
+        # No end phrase. If SerialEM has abandoned the grid, none will come:
+        # finish what was announced, then stop and say why.
+        if not processed_now:
+            found = self._check_serialem_abort()
+            if found:
+                return self._halt(
+                    serialem.describe_abort(found),
+                    f"No more movies will come; {self.movies_count} movie(s) "
+                    f"were processed.",
+                    reason='serialem_aborted')
         return None
 
     def _handle_running_autosolve(self):
@@ -1082,29 +1383,183 @@ class REyesProcessor:
             ProcessingState.RUNNING_AUTOSOLVE: self._handle_running_autosolve,
         }
 
+    # ------------------------------------------------------- how it ends #
+    def _halt(self, *lines, reason=None):
+        """Stop, saying why. A halt is a result, not a crash."""
+        self.logger.error("=" * 80)
+        for line in lines:
+            self.logger.error(line)
+        self.logger.error("=" * 80)
+        self._write_session_status('failed', ' '.join(str(l) for l in lines),
+                                   reason=reason)
+        return STOP
+
+    def _write_session_status(self, state, detail='', reason=None):
+        """Record how this session ended, once, in session_status.json.
+
+        Nothing else says a session is finished: the monitor's exit code is not
+        visible to anything watching the session folder. So the last thing the
+        monitor does is say what happened, in the session root, beside the
+        data it describes.
+
+        `state` is `complete`, `failed` or `interrupted`. `reason` is a short
+        machine word (`serialem_aborted`, `stepscan_failed`, `idle_timeout`,
+        `sigterm`, ...), added only when there is one.
+        """
+        if self._status_written:
+            return
+        path = os.path.join(self.working_directory, 'session_status.json')
+        payload = {'state': state, 'detail': detail,
+                   'utc': datetime.now(timezone.utc).strftime(
+                       '%Y-%m-%dT%H:%M:%SZ')}
+        if reason:
+            payload['reason'] = reason
+        try:
+            tmp = str(path) + '.tmp'
+            with open(tmp, 'w', newline='\n') as f:
+                json.dump(payload, f, indent=2)
+                f.write('\n')
+            os.replace(tmp, path)
+            self._status_written = True
+            self.logger.info(f"SESSION_STATUS | state={state} | {path}")
+        except OSError as exc:
+            self.logger.error(f"could not write session_status.json: {exc}")
+
+    def _completed_status(self):
+        """The verdict of a monitor that has processed everything it got."""
+        if self.serialem_abort:
+            self._write_session_status(
+                'failed', serialem.describe_abort(self.serialem_abort) +
+                ' -- what arrived before it was processed',
+                reason='serialem_aborted')
+        else:
+            self._write_session_status('complete', self.completion_detail)
+
+    def _final_status(self):
+        """The verdict for a monitor that ended without writing one."""
+        if self._status_written:
+            return
+        if self.state == ProcessingState.COMPLETED:
+            self._completed_status()
+        elif self.stop_reason:
+            self._write_session_status('interrupted', self.stop_reason,
+                                       reason='sigterm')
+        else:
+            self._write_session_status(
+                'interrupted', f'monitor stopped in state {self.state.name}')
+
+    def _check_serialem_abort(self):
+        """SerialEM's abort of THIS grid, read from its logs, or None.
+
+        Remembered once found, so the final status can say it even when the
+        monitor first finishes the blocks it already has.
+        """
+        try:
+            found = self._abort_watch.check()
+        except Exception as exc:          # never let the watch kill the monitor
+            self.logger.warning(f"abort check failed: {exc}")
+            return None
+        if found and not self.serialem_abort:
+            self.logger.error(f"SERIALEM_ABORT | reason={found['reason']} | "
+                              f"log={found['log']} | {found['text']}")
+        if found:
+            self.serialem_abort = found
+        return found
+
+    def _arrival_signature(self):
+        """(entries, newest mtime, log bytes) of what SerialEM wrote.
+
+        None while the session holds nothing from the microscope -- a monitor
+        started before its grid is not idle, it is early.
+        """
+        count, newest, log_bytes = 0, 0, 0
+        try:
+            entries = list(os.scandir(self.working_directory))
+        except OSError:
+            return None
+        for entry in entries:
+            name = entry.name
+            if name in MONITOR_OWNED or name.startswith('.') or name.endswith('.tmp'):
+                continue
+            try:
+                stat = entry.stat()
+            except OSError:
+                continue
+            count += 1
+            newest = max(newest, stat.st_mtime_ns)
+            if name.lower().endswith('.log'):
+                log_bytes += stat.st_size
+        return (count, newest, log_bytes) if count else None
+
+    def _idle_expired(self):
+        """True (and the session ended) when SerialEM has gone quiet too long."""
+        if not self.idle_timeout or self.state not in IDLE_STATES:
+            self._idle_clock = None
+            return False
+        signature = self._arrival_signature()
+        if signature is None:
+            self._idle_clock = None
+            return False
+        now = time.monotonic()
+        if self._idle_clock is None or self._idle_clock[0] != signature \
+                or self._idle_clock[2] != self.state:
+            self._idle_clock = (signature, now, self.state)
+            return False
+        idle = now - self._idle_clock[1]
+        if idle < self.idle_timeout:
+            return False
+        detail = (f"nothing new arrived from the microscope for {idle / 3600:.1f} h "
+                  f"(--idle-timeout {self.idle_timeout:g} s) while in state "
+                  f"{self.state.name}")
+        self.logger.error("=" * 80)
+        self.logger.error(f"IDLE TIMEOUT: {detail}")
+        self.logger.error("=" * 80)
+        self._write_session_status('interrupted', detail, reason='idle_timeout')
+        return True
+
     def monitor(self):
-        """Main monitoring loop with state machine"""
+        """Main monitoring loop with state machine.
+
+        The session says how it ended, in `finally`, because the cases that
+        most need a verdict on disk are the ones that do not reach a tidy
+        ending: a cancelled job, a crash in a handler, an operator's Ctrl-C.
+        """
         self.logger.info(f"Starting monitoring in working directory: {self.working_directory}")
         handlers = self.state_handlers()
 
         try:
             while True:
                 handler = handlers.get(self.state)
+                before = self.state
                 # A state with no handler (COMPLETED) simply polls.
                 outcome = handler() if handler is not None else None
 
                 if outcome is STOP:
                     return
+                if outcome is None and self.state == before \
+                        and self.state in ABORT_STATES:
+                    found = self._check_serialem_abort()
+                    if found:
+                        self._halt(serialem.describe_abort(found),
+                                   f"The monitor was waiting in {before.name}; "
+                                   f"nothing more will arrive for this grid.",
+                                   reason='serialem_aborted')
+                        return
+                if self._idle_expired():
+                    return
                 if outcome is not SKIP_DELAY:
                     time.sleep(self.poll_interval)
 
         except KeyboardInterrupt:
-            self.logger.info("Shutting down monitor...")
+            self.logger.info("Shutting down monitor..."
+                             + (f" ({self.stop_reason})" if self.stop_reason else ""))
         except Exception as e:
             self.logger.error(f"Unexpected error in monitor loop: {str(e)}")
             import traceback
             self.logger.error(traceback.format_exc())
             raise
+        finally:
+            self._final_status()
 
 def get_microscope_config_choices():
     """
@@ -1237,12 +1692,29 @@ def main():
                             type=float,
                             default=DEFAULT_SUBPROCESS_TIMEOUT,
                             help=f'Seconds before a processing subprocess is treated as hung '
-                                 f'and killed (default: {DEFAULT_SUBPROCESS_TIMEOUT:g})')
+                                 f'and killed (default: {DEFAULT_SUBPROCESS_TIMEOUT:g}). A stall '
+                                 f'detector, not a work limit')
+
+    reyes_group.add_argument('--movie-timeout',
+                            type=float,
+                            default=None,
+                            help='Seconds before autoprocess of ONE movie is abandoned, '
+                                 'the movie marked as finished with, and the session '
+                                 'moves on (default: the --subprocess-timeout value)')
 
     reyes_group.add_argument('--autosolve-timeout',
                             type=float,
                             default=None,
                             help='Seconds before AutoSolve is killed (default: no limit)')
+
+    reyes_group.add_argument('--idle-timeout',
+                            type=float,
+                            default=DEFAULT_IDLE_TIMEOUT,
+                            help=f'Seconds with nothing new from the microscope, while '
+                                 f'waiting on SerialEM, before the monitor stops and '
+                                 f'writes session_status.json "interrupted" '
+                                 f'(default: {DEFAULT_IDLE_TIMEOUT:g} = never). A '
+                                 f'backstop: a SerialEM abort is read from its logs')
 
     reyes_group.add_argument('--autoprocess',
                             action='store_true',
@@ -1401,7 +1873,9 @@ def main():
         stepscan_only=args.stepscan_only,
         montage_only=args.montage_only,
         subprocess_timeout=args.subprocess_timeout,
-        autosolve_timeout=args.autosolve_timeout
+        movie_timeout=args.movie_timeout,
+        autosolve_timeout=args.autosolve_timeout,
+        idle_timeout=args.idle_timeout,
     )
 
     # Only include AutoProcess args if the flag is set
@@ -1444,9 +1918,14 @@ def main():
         })
 
     processor = REyesProcessor(**processor_kwargs)
+    install_sigterm_handler(processor)
 
     processor.monitor()
+    if processor.stop_reason:
+        # Stopped by SIGTERM: session_status.json says "interrupted"; the exit
+        # status says so too, as a process killed by the signal would.
+        return 128 + signal.SIGTERM
     return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -7,7 +7,6 @@ import logging
 import os
 import re
 import sys
-from typing import Optional
 import pickle
 import numpy as np
 from pathlib import Path
@@ -20,7 +19,7 @@ from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs
 from pyREyes.lib.REyes_utils import find_nav_file
 
 
-__version__ = '3.4.10'
+__version__ = '3.6.0'
 __min_required_version__ = '3.4.0'
 
 

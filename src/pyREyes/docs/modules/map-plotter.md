@@ -1,6 +1,6 @@
 # REyes Final Map Plotter (FMP)
 
-**Part of pyREyes v3.4.10** - Comprehensive overlay visualization tool
+**Part of pyREyes v3.6.0** - Comprehensive overlay visualization tool
 
 Creates overlay visualizations combining montage images with diffraction data maps and selected targets with multiple visualization options and customizable display parameters.
 

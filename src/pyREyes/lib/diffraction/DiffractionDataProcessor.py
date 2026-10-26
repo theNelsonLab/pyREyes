@@ -1,13 +1,15 @@
 
 import logging
 import os
-from typing import List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
-import hyperspy.api as hs
+import matplotlib
+matplotlib.use('Agg')  # files only; never a GUI backend, even with X11 forwarding
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from pyREyes.lib.diffraction import beam_center_search as bcs
 from pyREyes.lib.REyes_logging import log_print
 from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs
 
@@ -18,13 +20,16 @@ class DiffractionProcessingError(Exception):
     pass
 
 class DiffractionDataProcessor:
-    def __init__(self, microscope_type: str, camera_length: Optional[float] = None, pixel_size: Optional[float] = None):
+    def __init__(self, microscope_type: str, camera_length: Optional[float] = None, pixel_size: Optional[float] = None,
+                 beam_center: bcs.Mode = bcs.MODE_AUTO):
         """Initialize processor with microscope configuration and optional overrides.
         
         Args:
             microscope_type: Type of microscope from MICROSCOPE_CONFIGS
             camera_length: Optional override for camera length in mm
             pixel_size: Optional override for pixel size in mm/pixel
+            beam_center: Where snapshot rings are centred: 'auto' to find the
+                direct beam, 'frame' for the middle of the frame, or (x, y)
         """
         if microscope_type not in MICROSCOPE_CONFIGS:
             raise ValueError(f"Unsupported microscope type. Choose from: {list(MICROSCOPE_CONFIGS.keys())}")
@@ -39,6 +44,41 @@ class DiffractionDataProcessor:
         if pixel_size is not None:
             log_print(f"Overriding pixel size: {pixel_size} mm/pixel")
             self.config.pixel_size = pixel_size
+
+        self.beam_center_mode = beam_center
+        self._beam_centres: Dict[Tuple[int, int], bcs.BeamCentre] = {}
+
+    def find_beam_center(self, mrc_files: Iterable[str], output_dir: Optional[str] = None) -> None:
+        """Find the direct beam from the frames that are about to be plotted.
+
+        One centre serves every snapshot of a session, because a single frame's
+        estimate is not to be relied on. Call this before the plotting loop; a
+        snapshot plotted without it has only its own frame to go on.
+
+        Args:
+            mrc_files: The MRC files whose snapshots will be plotted
+            output_dir: Where to record the centre, beside the snapshots
+        """
+        from pyREyes.dif_map import load_diffraction_frame
+
+        if self.beam_center_mode == bcs.MODE_AUTO:
+            frames = []
+            for mrc_file in bcs.sample(list(dict.fromkeys(str(f) for f in mrc_files))):
+                try:
+                    frames.append(load_diffraction_frame(mrc_file)[0])
+                except Exception as e:
+                    log_print(f"Beam centre: could not read {mrc_file}: {str(e)}", logging.WARNING)
+            self._beam_centres.update(bcs.find_beam_centres(frames))
+
+        if output_dir is not None and self.beam_center_mode != bcs.MODE_FRAME:
+            bcs.write_sidecar(output_dir, self.beam_center_mode, self._beam_centres.values())
+
+    def _beam_centre_for(self, frame: np.ndarray) -> bcs.BeamCentre:
+        """The centre to draw this frame's rings about."""
+        shape = (frame.shape[0], frame.shape[1])
+        if self.beam_center_mode == bcs.MODE_AUTO and shape not in self._beam_centres:
+            self._beam_centres.update(bcs.find_beam_centres([frame]))
+        return bcs.resolve(self.beam_center_mode, shape, self._beam_centres)
 
     def process_csv(self, file_path: str) -> pd.DataFrame:
         """Process CSV file with error handling and validation."""
@@ -134,15 +174,18 @@ class DiffractionDataProcessor:
     ) -> None:
         """Plot single diffraction snapshot with resolution rings."""
         try:
-            signal = hs.load(mrc_file)
-            frame = signal.data
+            # The loader the diffraction map scored the frame with, so a
+            # multi-frame MRC is summed here exactly as it was there
+            from pyREyes.dif_map import load_diffraction_frame
+
+            frame, _ = load_diffraction_frame(mrc_file)
 
             # Calculate pixel size based on image dimensions
             pixel_size = self._calculate_pixel_size(frame.shape)
             
-            center_x = frame.shape[0] / 2
-            center_y = frame.shape[1] / 2
-            max_radius = min(center_x, center_y, frame.shape[0] - center_x, frame.shape[1] - center_y)
+            centre = self._beam_centre_for(frame)
+            center_x, center_y = centre.x, centre.y
+            max_radius = centre.max_ring_radius()
 
             # Create figure and plot
             fig, ax = plt.subplots(figsize=(8, 8))
@@ -151,6 +194,7 @@ class DiffractionDataProcessor:
 
             # Add resolution rings
             self._add_resolution_rings(ax, center_x, center_y, max_radius, pixel_size)
+            bcs.annotate(ax, centre)
 
             # Customize plot
             ax.set_axis_off()

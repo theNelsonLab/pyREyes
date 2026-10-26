@@ -1,7 +1,7 @@
 # REyes (Reciprocal Eyes)
 ## End-to-End Autonomous Electron Diffraction
 
-**pyREyes v3.4.10** - Automated MicroED diffraction data collection and analysis package
+**pyREyes v3.6.0** - Automated MicroED diffraction data collection and analysis package
 
 This repository contains a series of scripts designed to process diffraction data, generate heatmaps, identify key targets, and manage navigation files for SerialEM. The scripts are structured to be executed in the order outlined below, ensuring that new blocks of data are processed systematically while maintaining data integrity.
 
@@ -178,9 +178,11 @@ This script processes blocks of diffraction images, classifies their quality bas
 
 #### Key Processing Steps:
 1. **Block Discovery**: Identifies folders containing diffraction data and orders files by index, so blocks recorded across midnight are processed as one block; incomplete blocks are skipped with a warning
-2. **Image Processing**: Stacks are summed; frames larger than 2048×2048 have bad lines removed and are binned to 2048×2048; smaller frames use dedicated detection parameters; Gaussian filtering and binary image creation
+2. **Image Processing**: 8-bit (MRC mode 0) frames are read as unsigned counts unless the header marks them signed; stacks are summed exactly; frames larger than 2048×2048 have bad lines removed and are binned to 2048×2048; smaller frames use dedicated detection parameters; Gaussian filtering and binary image creation
 3. **Quality Classification**: Five-category system with primary spot detection and secondary Fourier Transform analysis
-4. **Data Organization**: Coordinates extraction, DataFrame construction, and top target selection
+4. **Data Organization**: Coordinates extraction (the `Stage` line is found even when extra log lines follow a frame), DataFrame construction, and top target selection
+
+Spot detection works in double precision, so the same frames give the same results on every machine.
 
 #### Usage:
 ```bash
@@ -218,7 +220,7 @@ This script processes diffraction target data and generates SerialEM-compatible 
 #### Key Features:
 - **Multi-Target Processing**: Handles quality, spots, and sum-based target CSV files
 - **Navigation File Generation**: Creates SerialEM-compatible .nav files with proper item numbering
-- **Diffraction Visualization**: Generates pattern snapshots with resolution rings
+- **Diffraction Visualization**: Generates pattern snapshots with resolution rings drawn about the detected direct beam (recorded in `targets/beam_center.json`)
 - **Multi-Microscope Support**: Configurable presets for different microscope/camera combinations
 
 #### Key Outputs:
@@ -246,6 +248,7 @@ Options:
 - `--microscope`: Specify microscope configuration (default: Arctica-CETA)
 - `--camera-length`: Override default camera length (in mm)
 - `--pixel-size`: Override default pixel size (in mm/pixel)
+- `--beam-center`: Centre of the resolution rings: `auto` (default) finds the direct beam, `frame` uses the middle of the frame (as in 3.4.10 and earlier), or `X,Y` in pixels
 
 Example:
 ```bash
@@ -295,6 +298,7 @@ Options:
 - `--output-folder`: Custom folder for diffraction snapshots
 - `--camera-length`: Override default camera length (mm)
 - `--pixel-size`: Override default pixel size (mm/pixel)
+- `--beam-center`: Centre of the resolution rings: `auto` (default) finds the direct beam, `frame` uses the middle of the frame (as in 3.4.10 and earlier), or `X,Y` in pixels
 
 #### Input File Format:
 `add_targets.txt` should contain one filename per line:
@@ -355,6 +359,7 @@ Options:
 - `--tolerance`: Minimum distance between targets in microns (default: 10.1)
 - `--input-files`: Custom input navigation files (category-based selection)
 - `--target-lists`: Target lists for block-based selection: `sum`, `peaks`, `dqi`; 1-3 values (default: all three). Applies only with `--top-target-per-block`
+- `--beam-center`: Centre of the resolution rings: `auto` (default) finds the direct beam, `frame` uses the middle of the frame (as in 3.4.10 and earlier), or `X,Y` in pixels (block mode snapshots)
 
 Example:
 ```bash
@@ -466,6 +471,8 @@ Options:
 - `--stepscan-only`: Skip movie collection and processing
 - `--montage-only`: Process only the initial montage and grid squares, then exit
 - `--subprocess-timeout`: Seconds before a processing subprocess is treated as hung and killed (default: 1800)
+- `--movie-timeout`: Seconds before the processing of one movie is abandoned and the session moves on (default: the `--subprocess-timeout` value, 1800)
+- `--idle-timeout`: Seconds with nothing new from the microscope, while waiting on SerialEM, before the monitor stops (default: 0, off)
 - `--autosolve-timeout`: Seconds before AutoSolve is killed (default: no limit)
 - `--autoprocess`: Enable automatic movie processing (requires `--microscope-config`)
 - `--autosolve`: Enable automatic structure solution (requires AutoSolve to be separately installed)
@@ -497,11 +504,21 @@ reyes-monitor --microscope Arctica-CETA --filtering 9 --autoprocess --microscope
 
 Movie processing:
 - With `--autoprocess`, the monitor writes `autoprocess_done.flag` in a movie folder once autoprocess succeeds. A restarted monitor skips movies that have this flag (without `--autoprocess`, movies that were already renamed) and still counts them in the totals
-- An autoprocess run that exits with a non-zero code is reported as a failure; a movie is marked as done (`autoprocess_done.flag`) only after a successful run
+- An autoprocess run that exits with a non-zero code is reported as a failure; a movie is marked as done (`autoprocess_done.flag`) after a successful run, or with an "abandoned" note when it exceeds `--movie-timeout`
 - A processing step that exceeds `--subprocess-timeout` is killed together with its child processes and handled like a failed step
+- A movie whose processing exceeds `--movie-timeout` is killed, recorded as abandoned in its `autoprocess_done.flag` and not offered again; the session continues
+- Movie logs of a resumed movie stage (`<name>-1.log`, ...) are read after the original log
+
+Keeping going and stopping:
+- A grid square SerialEM did not finish (set aside by SerialEM, or never reported complete once a later block has started) is set aside instead of stalling the session; set-aside grid squares and crystals are listed in `targets/set_aside_items.json`
+- A SerialEM abort of the grid is detected from its logs; blocks already collected are still mapped, and the monitor stops instead of waiting
+- Stopping the monitor with SIGTERM, or `--idle-timeout`, records the session as interrupted
+- All plotting uses the non-interactive Agg backend, so no display is needed
 
 #### Output:
 - **Logs**: `REyes_logs/REyes_monitor.log`
+- **Session status**: `session_status.json` in the session folder: `state` (`complete`, `failed` or `interrupted`), `detail`, an optional `reason` and `utc`
+- **Set-aside list**: `targets/set_aside_items.json`
 - **Processing Artifacts**: Various output files from each processing step
 - **AutoSolve Results** (optional): Structure solution files
 

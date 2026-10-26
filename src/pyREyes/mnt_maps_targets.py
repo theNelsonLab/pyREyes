@@ -10,21 +10,22 @@ import os
 import sys
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple
 
 import hyperspy.api as hs
+import matplotlib
+matplotlib.use('Agg')  # files only; never a GUI backend, even with X11 forwarding
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from scipy.ndimage import rotate
 
 from pyREyes.lib.ui.REyes_ui import print_banner
 from pyREyes.lib.REyes_logging import setup_logging, log_print
 from pyREyes.lib.image_processing.PlottingManager import PlottingManager
 from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs
 
-__version__ = '3.4.10'
+__version__ = '3.6.0'
 __min_required_version__ = '3.4.0'
 
 MICROSCOPE_CONFIGS = load_microscope_configs()

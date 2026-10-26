@@ -1,11 +1,6 @@
-from math import atan2, degrees, ceil
 import matplotlib
-import matplotlib.pyplot as plt
-import psutil
-from scipy.spatial import cKDTree
+matplotlib.use('Agg')  # files only; never a GUI backend, even with X11 forwarding
 import numpy as np
-from .CartImage import CartImage
-import os
 
 
 def solve_scaling_magnitude(camera_scale, rot_angle_deg):

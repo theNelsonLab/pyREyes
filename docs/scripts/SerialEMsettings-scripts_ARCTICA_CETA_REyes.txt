@@ -4,8 +4,13 @@ MacroName START_REYES
 
 ################BEFORE STARTING###############
 #  INTEGRATED MULTI-GRID PIPELINE
+#  Talos Arctica + Ceta camera. SerialEM writes every image itself.
 #  Supports: Single-grid and Multi-grid modes
-#  Supports: Automated (FSD/Screen/Montage) and Manual (FSD/Screen) workflows
+#  Supports: Automated (FSD/Screen/Montage) workflows,
+#            with a new-run / resume-from-any-stage prompt
+#  Supports: Manual (FSD/Screen) workflows, single grid only
+#
+#  Run REyes with --microscope Arctica-CETA (serialEM_log 2).
 #
 #  TURN OFF LOW DOSE ON SCOPE
 #  TURN ON LOW DOSE IN SERIALEM
@@ -32,6 +37,84 @@ Echo
 # Call setup helper to collect all parameters
 Call Setup_Helper
 
+# =============================================================================
+# NEW RUN OR RESUME
+# =============================================================================
+# One question, for every AUTOMATED mode, single grid or multi-grid. Pressing
+# Enter starts a new run. Answering 0 asks which stage to restart from, and that
+# number has NO default: a stray Enter there must not skip stages.
+#
+# Automated_Pipeline_Helper carries a gate on EVERY stage of FSD and Screen,
+# so either pipeline can be re-entered anywhere.
+#
+# WHAT A RESUME RELIES ON
+#   - the SAME base directory and the SAME sample name as the interrupted run;
+#   - every acquisition stage skipping the items it already finished (the
+#     *_done.flag files), so resuming AT the stage that stalled re-collects only
+#     what is missing;
+#   - the navigator: left open it is used as it is, otherwise the helper reads
+#     <sample>_210LM_NxN_nav.nav back from the grid's folder;
+#   - the navigator item blocks, which each merge records in
+#     targets\range_*.txt, so no item numbers have to be read off a log.
+#
+# MULTI-GRID. resume_pending is handed to the FIRST grid that is processed and
+# then reset to 1, so only that grid resumes and every later grid starts from
+# its montage. Give the slot range starting AT the grid to resume.
+#
+# The manual workflow is not offered a resume: it is single-grid REyes with
+# someone at the microscope.
+resume_pending := 1
+resume_from := 1
+If $workflow_type == 1 AND $pipeline_mode != 3
+   If $pipeline_mode == 1
+      resume_max = 7
+   Else
+      resume_max = 5
+   EndIf
+
+   Echo
+   Echo ================================================
+   Echo NEW RUN OR RESUME?
+   Echo ================================================
+   Echo   1 = NEW run, start from the montage (default - just press Enter)
+   Echo   0 = RESUME an interrupted run in this SAME base directory
+   EnterDefaultedNumber 1 -1 Is this a NEW run? (1 = yes, 0 = no, resume):
+   new_run = $reportedValue1
+   If $new_run != 0 AND $new_run != 1
+      Exit Answer 1 for a new run or 0 to resume
+   EndIf
+
+   If $new_run == 0
+      Echo
+      Echo Restart from which stage?  Pipeline: $pipeline_name
+      Echo   1  montage             (an existing montage file is kept, not retaken)
+      Echo   2  grid squares        (waits for REyes to write grid_squares\eucentricity.nav)
+      Echo   3  eucentricity        (needs grid_squares\eucentricity.nav on disk)
+      Echo   4  eucentric plane     (waits for grid_squares\eucentricity_correction.png)
+      Echo   5  step-scan           (grid squares already mapped are skipped)
+      If $pipeline_mode == 1
+         Echo   6  wait for targets    (waits for targets\targets.nav)
+         Echo   7  rotation movies     (crystals already collected are skipped)
+      EndIf
+      Echo
+      Echo If you are unsure between two stages, choose the EARLIER one: a stage
+      Echo that is already complete costs only the time to walk its done flags.
+      Echo Use the SAME base directory and sample name as the interrupted run.
+      If $single_grid_mode == 0
+         Echo
+         Echo MULTI-GRID: the resume applies to the FIRST grid of the slot range
+         Echo only (slot $MinSlotNum unless it is SKIPped). Later grids start from
+         Echo their montage. The grid must be back IN ITS SLOT, not on the stage.
+      EndIf
+      EnterOneNumber Restart from which stage number (1 to $resume_max)?
+      If $reportedValue1 < 1 OR $reportedValue1 > $resume_max
+         Exit Stage must be between 1 and $resume_max for this pipeline
+      EndIf
+      resume_pending := $reportedValue1
+   EndIf
+   Echo RUN_START | new_run=$new_run | resume_from=$resume_pending | pipeline=$pipeline_name
+EndIf
+
 # Check for unsupported combination: Multi-grid + Manual
 If $single_grid_mode == 0 AND $workflow_type == 2
    Echo
@@ -39,11 +122,11 @@ If $single_grid_mode == 0 AND $workflow_type == 2
    Echo ERROR: UNSUPPORTED COMBINATION
    Echo ================================================
    Echo
-   Echo Multi-grid manual mode is not supported.
-   Echo Please use single-grid mode for manual workflows.
+   Echo Multi-grid manual mode is not yet supported.
+   Echo Please use single-grid mode for manual workflows for now.
    Echo
    Echo ================================================
-   Exit Multi-grid manual mode is not supported
+   Exit Multi-grid manual mode not yet supported
 Endif
 
 # Slot verification (multi-grid only)
@@ -58,7 +141,7 @@ Call Directory_Setup_Helper
 If $workflow_type == 1
    # Automated mode
    If $pipeline_mode == 1 OR $pipeline_mode == 2
-      # FSD or Screen - REyes required
+      # FSD or Screen - REyes required (--microscope Arctica-CETA).
       Call REyes_Setup_Automated
    ElseIf $pipeline_mode == 3
       # Montage - REyes optional
@@ -81,6 +164,10 @@ Echo ================================================
 
 If $single_grid_mode == 0
    SlotNum = $MinSlotNum
+Else
+   # Single-grid mode has no slot, but $SlotNum is referenced by messages
+   # further down (including the error handler), so it must be defined.
+   SlotNum = 0
 Endif
 successful_grids = 0
 failed_grids = 0
@@ -114,6 +201,11 @@ Loop $ItrNum slotIndex
          Continue
       Endif
    Endif
+
+   # The resume stage belongs to the first grid that reaches this point; every
+   # grid after it starts from stage 1. See NEW RUN OR RESUME above.
+   resume_from := $resume_pending
+   resume_pending := 1
 
    Echo Sample: $current_sample
    If $single_grid_mode == 0
@@ -157,9 +249,17 @@ Loop $ItrNum slotIndex
    # LOG ORDER: SaveLogOpenNew BEFORE SetDirectory
    # SaveLogOpenNew saves previous log in CURRENT directory (wherever we are)
    # and opens new log. Even if REyes changed directory, this captures it.
+   #
+   # Log name is built by concatenating VARIABLES ONLY, never `$var_text$var`.
+   # Underscores are legal in SerialEM variable names, so `$current_base_name_`
+   # is read as a variable called `current_base_name_`, not as the variable
+   # followed by a literal underscore. Building the name through $log_sep
+   # removes the ambiguity; the resulting filename is unchanged.
+   log_sep @= _
+   grid_log_name @= $current_base_name$log_sep$pipeline_name$log_sep$yyyymmdd
    Echo Opening new log file for: $current_base_name
-   SaveLogOpenNew $current_base_name_$pipeline_name_$yyyymmdd
-   Echo New log opened: $current_base_name_$pipeline_name_$yyyymmdd.log
+   SaveLogOpenNew $grid_log_name
+   Echo New log opened: $grid_log_name.log
 
    # Now change to grid directory
    Try
@@ -182,7 +282,7 @@ Loop $ItrNum slotIndex
 
    # Log header information now that we're in the correct directory
    Echo ================================================
-   Echo Log file: $current_base_name_$pipeline_name_$yyyymmdd.log
+   Echo Log file: $grid_log_name.log
    Echo Grid directory: $sample_dir_path
    Echo Sample: $current_sample
    If $single_grid_mode == 0
@@ -199,6 +299,21 @@ Loop $ItrNum slotIndex
          LoadCartridge $SlotNum
          Echo Successfully loaded cartridge from slot $SlotNum
          Delay 3 sec
+         # Do not hand the grid to the pipeline while the stage still reports
+         # busy after the exchange ("The stage is busy or not ready; move
+         # aborted"). Every navigator move also waits and retries.
+         stage_settled = 0
+         Loop 120
+            ReportStageBusy
+            If $reportedValue1 == 0
+               stage_settled = 1
+               Break
+            EndIf
+            Delay 1 sec
+         EndLoop
+         If $stage_settled == 0
+            Echo WARNING: the stage still reports busy 2 min after the exchange
+         EndIf
       Catch
          Echo ERROR: Failed to load cartridge from slot $SlotNum
          grid_results[$slotIndex] := FAILED
@@ -220,10 +335,13 @@ Loop $ItrNum slotIndex
       Try
          Call Automated_Pipeline_Helper
 
-         # Check results from helper (partial_completion set by helper if no targets)
+         # partial_completion means the helper returned early and has already
+         # recorded the grid's outcome and updated the matching counter
+         # (PARTIAL: no targets; FAILED: stopped by the spot-size guard or no
+         # grid square mapped; SUCCESS with grid squares or crystals set aside).
+         # Counting it again here would put one grid in two totals.
          If $partial_completion == 1
-            # Already set by helper (no targets found)
-            successful_grids = $successful_grids + 1
+            Echo Outcome recorded by the pipeline helper
          Else
             # Mark as successful
             grid_results[$slotIndex] := SUCCESS
@@ -235,7 +353,11 @@ Loop $ItrNum slotIndex
       Catch
          Echo
          Echo !!!!! ERROR DURING PIPELINE EXECUTION !!!!!
-         Echo Grid: $current_sample (Slot $SlotNum)
+         If $single_grid_mode == 0
+            Echo Grid: $current_sample (Slot $SlotNum)
+         Else
+            Echo Grid: $current_sample
+         Endif
          Echo The pipeline encountered an error and stopped
          Echo Check individual log files for details
          grid_results[$slotIndex] := FAILED
@@ -297,10 +419,11 @@ Loop $ItrNum slotIndex
       Try
          Call Manual_Pipeline_Part2
 
-         # Check results from helper (partial_completion set by helper if no targets)
+         # partial_completion means Manual_Pipeline_Part2 returned early and has
+         # already recorded the grid's outcome and updated the matching counter
+         # (PARTIAL: no targets; FAILED: stopped by the spot-size guard).
          If $partial_completion == 1
-            # Already set by helper (no targets found)
-            successful_grids = $successful_grids + 1
+            Echo Outcome recorded by the pipeline helper
          Else
             # Mark as successful
             grid_results[$slotIndex] := SUCCESS
@@ -362,13 +485,20 @@ EndLoop
 ################# CLEANUP #################
 
 # LOG ORDER: SaveLogOpenNew BEFORE SetDirectory
+
 # This saves last grid's log (wherever we are) and opens summary log
 Echo All grids processed - opening summary log
+# Variables only -- see the note on log naming above. Every piece of literal
+# text lives in its own variable so no name can absorb the text after it.
+log_sep @= _
+summary_tag @= _summary
 If $single_grid_mode == 1
-   SaveLogOpenNew SingleGrid_$pipeline_name_$yyyymmdd_summary
+   grid_prefix @= SingleGrid
 Else
-   SaveLogOpenNew MultiGrid_$pipeline_name_$yyyymmdd_summary
+   grid_prefix @= MultiGrid
 Endif
+summary_log_name @= $grid_prefix$log_sep$pipeline_name$log_sep$yyyymmdd$summary_tag
+SaveLogOpenNew $summary_log_name
 
 # Now return to base directory
 SetDirectory $base_directory
@@ -453,11 +583,7 @@ ElseIf $pipeline_mode == 3
    Echo - Assess grid quality and ice thickness
 Endif
 Echo - Check individual log files in each sample directory
-If $single_grid_mode == 1
-   Echo - Check log file: SingleGrid_$pipeline_name_$yyyymmdd.log
-Else
-   Echo - Check log file: MultiGrid_$pipeline_name_$yyyymmdd.log
-Endif
+Echo - Check log file: $summary_log_name.log
 
 # Ensure column valve is closed for safety
 SetColumnOrGunValve 0
@@ -468,7 +594,6 @@ Echo All processing complete!
 # Final logging
 SaveLog
 EndMacro
-
 Macro	1
 ScriptName BatchED_Main_CETA
 
@@ -797,7 +922,6 @@ Echo BatchED complete!
 
 SaveLog
 EndMacro
-
 Macro	2
 MacroName REYES_Setup_Standalone
 
@@ -815,7 +939,15 @@ MacroName REYES_Setup_Standalone
 #  - Diffraction map dimension (map_size) - for REyes_STPSCN
 #  - Tilt range (selected_tilt) - for REyes_DFMV
 #
+#  The diffraction spot size is not declared here, so a standalone
+#  REyes_STPSCN or REyes_DFMV records the spot size without judging it.
+#
 ###################SETTINGS###################
+
+# Start from a clean slate, as after reopening SerialEM. Without this, a
+# standalone REyes_STPSCN / REyes_DFMV run after START_REYES in the same session
+# would reuse that run's spot expectation, mismatch policy and resume answers.
+ClearPersistentVars
 
 Echo
 Echo ================================================
@@ -852,7 +984,7 @@ Echo
 
 #MONTAGE DIMENSIONS
 Echo Enter montage dimension (used by REyes_MNT)
-Echo - Creates an NxN grid montage at 115x magnification
+Echo - Creates an NxN grid montage at 210x LM magnification (CETA)
 Echo - Typical values: 3x3, 4x4, or 5x5
 Echo - Range: 2 to 9
 Echo
@@ -940,16 +1072,20 @@ Echo Setup complete! Ready to run REyes macros.
 
 SaveLog
 EndMacro
-
 Macro	3
 
 EndMacro
-
 Macro	4
 MacroName Setup_Helper
 
 # This helper collects all pipeline parameters
 # Sets persistent variables for main script to use
+#
+# Modes: 1 FSD, 2 Screen, 3 Montage.
+# Rotation is NOT asked: on the Ceta REyes_DFMV uses a fixed nominal 0.3 deg/s
+# with 3 s frames. The measured stage rate is lower (about 0.12 deg/s, 0.89 deg
+# between frame starts, 0.36 deg exposed per frame); such movies index and
+# solve with an XDS oscillation of 0.9.
 
 #LOG DATE
 ReportDateTime
@@ -1054,6 +1190,38 @@ UserSetDirectory [Choose the BASE directory where files will be saved]
 base_directory := $reportedValue1
 Echo Base directory: $base_directory
 
+# The SESSION folder is <base>\<sample>-reyes and the -reyes suffix is appended
+# automatically, so the base directory must be the PARENT. Choosing the session
+# folder instead creates <sample>-reyes\<sample>-reyes, and navigators and log
+# files then end up one level away from where the run looks for them.
+# Tested by looking for what a SESSION folder contains rather than by parsing
+# the name: SerialEM has no substring function, and the file test catches the
+# real condition instead of a naming convention.
+DoesFileExist $base_directory\grid_squares
+looks_like_session = $reportedValue1
+DoesFileExist $base_directory\targets
+If $reportedValue1 == 1
+   looks_like_session = 1
+Endif
+If $looks_like_session == 1
+   Echo
+   Echo ############################################################
+   Echo # WARNING: this looks like a SESSION folder, not a base folder
+   Echo #   $base_directory
+   Echo #
+   Echo # It already contains grid_squares\ or targets\.
+   Echo # REyes appends -reyes itself, so this would create
+   Echo #   $base_directory\<sample>-reyes
+   Echo # and the run would look for its files one level too deep.
+   Echo # You probably want the PARENT of this folder.
+   Echo ############################################################
+   Echo
+   YesNoBox Use this directory anyway? NO lets you re-choose.
+   If $reportedValue1 == 0
+      Exit Re-run and choose the PARENT directory
+   Endif
+Endif
+
 #GET SLOT RANGE (ONLY FOR MULTI-GRID MODE)
 If $single_grid_mode == 0
    EnterOneNumber Enter minimum slot number (typically 1-12):
@@ -1083,9 +1251,9 @@ If $workflow_type == 1
    Echo 1 = FSD (Montage -> Eucentricity -> StepScan -> Targets -> Movies)
    Echo 2 = Screen (Montage -> Eucentricity -> StepScan, NO movies)
    Echo 3 = Montage Only (Grid overview images ONLY, no processing)
-   EnterOneNumber Enter pipeline mode (1 for FSD, 2 for Screen, 3 for Montage):
+   EnterOneNumber Enter pipeline mode (1 FSD, 2 Screen, 3 Montage):
    If $reportedValue1 < 1 or $reportedValue1 > 3
-      Exit Pipeline mode must be 1 (FSD), 2 (Screen), or 3 (Montage)
+      Exit Pipeline mode must be 1 (FSD), 2 (Screen) or 3 (Montage)
    Endif
 Else
    # Manual workflow - no Montage-only option
@@ -1154,7 +1322,7 @@ If $pipeline_mode == 1 or $pipeline_mode == 2
    Endif
 Endif
 
-#GET TILT RANGE (ONLY IF FSD MODE)
+#GET TILT RANGE (FSD ONLY - THE ONLY MODE THAT COLLECTS ROTATION DATA)
 If $pipeline_mode == 1
    EnterDefaultedNumber 50 -1 Enter max positive tilt angle for movies (5-70 degrees):
    If $reportedValue1 < 5 or $reportedValue1 > 70
@@ -1166,7 +1334,42 @@ If $pipeline_mode == 1
    Else
       Echo Tilt range for all grids: +/- $selected_tilt degrees
    Endif
+   Echo Rotation: fixed in REyes_DFMV for CETA - nominal 0.3 deg/s, 3 s frames
 Endif
+
+# SPOT SIZE FOR DIFFRACTION (1 FSD, 2 Screen)
+# REyes_STPSCN and REyes_DFMV both call REyes_SpotGuard, which compares the
+# microscope's spot size in the Record area against this value. Without a
+# declared value the guard only records the spot size and judges nothing.
+If $pipeline_mode == 1 OR $pipeline_mode == 2
+   Echo
+   Echo Spot size the DIFFRACTION should be collected at (NOT the LM value).
+   Echo   The guard verifies this after every LM -> SA transition. It never
+   Echo   SETS the spot size -- it only refuses to collect at the wrong one.
+   # Default 10: the spot size used for Ceta REyes StepScans and movies
+   # (1 s, bin 2).
+   EnterDefaultedNumber 10 -1 Expected diffraction spot size:
+   If $reportedValue1 < 1 or $reportedValue1 > 11
+      Exit Spot size must be between 1 and 11
+   Endif
+   spot_expected := $reportedValue1
+   Echo Expected spot size: $spot_expected
+
+   EnterDefaultedNumber 1 -1 Spot size mismatch policy (1 abort, 2 continue):
+   If $reportedValue1 != 1 and $reportedValue1 != 2
+      Exit Policy must be 1 (abort) or 2 (continue)
+   Endif
+   spot_mismatch_policy := $reportedValue1
+Endif
+
+# RESUME DEFAULTS
+# REyes_STPSCN and REyes_DFMV ask how to treat work that is already finished
+# when these are not set. Setting them here keeps that question from stopping an
+# unattended run. 0 = skip grid squares / crystals that already have a done
+# flag (nothing is collected twice); 1 = redo everything.
+
+stpscn_redo_all := 0
+dfmv_redo_all := 0
 
 #COLLECT SAMPLE NAMES
 Echo
@@ -1175,7 +1378,7 @@ If $single_grid_mode == 1
    EnterString temp_name Sample name:
    # Store base name for file naming
    base_sample_name := $temp_name
-   # Append -reyes suffix: REyes session folders are named <sample>-reyes
+   # Append -reyes suffix for folder name (critical for database)
    full_sample_name = $temp_name-reyes
    Echo Sample: $temp_name (folder: $full_sample_name)
    NewArray sample_names 1 1
@@ -1198,7 +1401,7 @@ Else
          sample_names[$slotIndex] := SKIP
          base_names[$slotIndex] := SKIP
       Else
-         # Append -reyes suffix: REyes session folders are named <sample>-reyes
+         # Append -reyes suffix for folder name (critical for database)
          full_sample_name = $temp_name-reyes
          Echo Slot $SlotNum: $temp_name (folder: $full_sample_name)
          sample_names[$slotIndex] := $full_sample_name
@@ -1232,12 +1435,15 @@ Endif
 If $pipeline_mode == 1
    Echo Tilt range: +/- $selected_tilt degrees
 Endif
+If $pipeline_mode == 1 or $pipeline_mode == 2
+   Echo Expected diffraction spot size: $spot_expected
+Endif
 Echo
 If $single_grid_mode == 1
-   Echo Sample folder name (with -reyes suffix):
+   Echo Sample folder name (with -reyes suffix for database):
    Echo   $sample_names[1]
 Else
-   Echo Sample folder names (with -reyes suffix):
+   Echo Sample folder names (with -reyes suffix for database):
    SlotNum = $MinSlotNum
    Loop $ItrNum slotIndex
       Echo   Slot $SlotNum: $sample_names[$slotIndex]
@@ -1251,15 +1457,21 @@ If $reportedValue1 == 0
    Exit User cancelled the operation
 Endif
 
-# Start overall logging
+# Start overall logging.
+# Build the name from VARIABLES ONLY, never `$var_text$var`: underscores are
+# legal in SerialEM variable names, so `$pipeline_name_` would be read as a
+# variable called `pipeline_name_` rather than the variable plus a literal
+# underscore. The resulting filename is unchanged.
 SetDirectory $base_directory
+log_sep @= _
 If $single_grid_mode == 1
-   SaveLogOpenNew SingleGrid_$pipeline_name_$yyyymmdd
+   grid_prefix @= SingleGrid
 Else
-   SaveLogOpenNew MultiGrid_$pipeline_name_$yyyymmdd
+   grid_prefix @= MultiGrid
 Endif
+setup_log_name @= $grid_prefix$log_sep$pipeline_name$log_sep$yyyymmdd
+SaveLogOpenNew $setup_log_name
 EndMacro
-
 Macro	5
 MacroName Slot_Verification_Helper
 
@@ -1379,7 +1591,6 @@ Endif
 Echo
 Echo Slot verification complete
 EndMacro
-
 Macro	6
 MacroName Directory_Setup_Helper
 
@@ -1449,16 +1660,30 @@ Else
    Endif
 Endif
 EndMacro
-
 Macro	7
 MacroName Automated_Pipeline_Helper
 
 # This helper executes the automated pipeline
-# Supports FSD (mode 1), Screen (mode 2), and Montage-only (mode 3)
-# Called for each grid in the main loop
+# Supports FSD (1), Screen (2), Montage-only (3)
+# Every stage of every mode carries a resume gate -- see RESUME POINT below.
+# Called for each grid in the main loop.
+#
+# A SET-ASIDE BLOCK OR ITEM NEVER ENDS THE GRID.
+#   REyes_STPSCN and REyes_DFMV set a failed grid square / crystal aside and
+#   go on. This helper:
+#     - fails the grid as All_blocks_failed, straight away, when the step-scan
+#       left NO grid square with data ($stpscn_collected == 0) -- no 25-minute
+#       wait for targets that cannot come;
+#     - otherwise carries on, and records a grid that set anything aside as
+#       SUCCESS with the count in the reason: Blocks_set_aside_N and/or
+#       Items_set_aside_N (one good grid square can be enough for a structure).
 
 Echo
 Echo ====== STARTING AUTOMATED PIPELINE FOR $current_sample ======
+
+# What this grid set aside, for the summary line (see the end of the macro).
+grid_blocks_aside = 0
+grid_items_aside = 0
 
 If $pipeline_mode == 1
    Echo Running FULL FSD Pipeline (7 steps total)
@@ -1474,62 +1699,253 @@ ElseIf $pipeline_mode == 3
    total_steps := 1
 Endif
 
-# STEP 1: Montage (ALL modes)
-Echo [1/$total_steps] Starting grid montage acquisition...
-Call REyes_MNT
-Echo [1/$total_steps] Grid montage completed successfully
+# =============================================================================
+# RESUME POINT  (a gate on EVERY stage, for every mode)
+# =============================================================================
+# $resume_from is the first stage number to execute. START_REYES sets it from
+# the "new run or resume" prompt -- to the chosen stage for the first grid of a
+# run, and to 1 for every grid after it. Stages below it are skipped ENTIRELY:
+# the user has stated they are done.
+#
+# This is the coarse layer. It sits on top of, and does not replace, the
+# per-item resume inside each stage: STPSCN skips grid squares it has mapped
+# and DFMV skips crystals whose movie folder already carries a done flag. So
+# re-running a stage is always safe, and this only saves the time of walking it.
+IsVariableDefined resume_from
+If $reportedValue1 == 0
+   resume_from := 1
+EndIf
 
-# STEPS 2-5: Screening workflow (FSD and Screen modes only)
+If $resume_from > $total_steps
+   Echo RESUME | stage $resume_from does not exist in this pipeline ($total_steps stages)
+   Exit Cannot resume from stage $resume_from: this pipeline has $total_steps stages
+EndIf
+
+If $resume_from > 1
+   Echo
+   Echo RESUME | from_stage=$resume_from - earlier stages will be SKIPPED
+   Echo
+
+   # --- THE NAVIGATOR -------------------------------------------------------
+   # Stage 1 is what normally opens it. With stage 1 skipped it has to be open
+   # already, or be read back from the file REyes_MNT saved it under. The name
+   # is built exactly as REyes_MNT builds it (210x LM).
+   rs_montage = _210LM_$mnt_sizex$mnt_size
+   rs_navtail = _nav.nav
+   rs_nav_file = $samplename$rs_montage$rs_navtail
+   ReportIfNavOpen
+   If $reportedValue1 == 0
+      DoesFileExist $rs_nav_file
+      If $reportedValue1 == 0
+         Echo
+         Echo RESUME | no navigator is open and $rs_nav_file is not in
+         Echo          $set_directory
+         Echo Check the base directory, the sample name and the montage size:
+         Echo all three must match the interrupted run.
+         Exit Cannot resume: no navigator is open and its file was not found
+      EndIf
+      ReadNavFile $rs_nav_file
+      Echo RESUME | navigator=read_from_file | file=$rs_nav_file
+   Else
+      Echo RESUME | navigator=already_open (expected: $rs_nav_file)
+   EndIf
+   ReportNumTableItems
+   rs_nav_items = $reportedValue1
+   Echo RESUME | navigator_items=$rs_nav_items
+
+   # --- STAGES 2 AND 3 expect ONLY the montage map --------------------------
+   # REyes_ECNT merges the eucentricity points and then walks items 2..N. Any
+   # item left over from the interrupted attempt would be walked as well, and
+   # would shift every later item number.
+   If $resume_from == 2 OR $resume_from == 3
+      rs_extra = $rs_nav_items - 1
+      If $rs_extra > 0
+         Echo RESUME | removing $rs_extra item(s): eucentricity starts from the montage map alone
+         Loop $rs_extra
+            DeleteNavigatorItem -1
+         EndLoop
+         SaveNavigator
+      EndIf
+   EndIf
+
+   # --- STAGE 5 needs the navigator stage 4 would have left ------------------
+   # The montage map and the grid squares, and NOTHING after them --
+   # REyes_STPSCN walks every item from 2 to the end as a grid square.
+   #   - squares already there are KEPT, with their REYES_DONE_STPSCN notes;
+   #   - if the navigator came back from a file saved before they were merged,
+   #     they are merged again from disk;
+   #   - if the interrupted run had got as far as merging the crystal targets,
+   #     those sit after the squares and would be step-scanned as squares. The
+   #     block REyes_DFMV recorded says where they start, so they are removed
+   #     here; DFMV merges them again when the chain reaches it, and crystals
+   #     already collected are skipped by their dfmv_done.flag.
+   If $resume_from == 5
+      If $rs_nav_items <= 1
+         Echo RESUME | navigator holds no grid squares - merging grid_squares.nav again
+         Call REyes_postECNT
+         SaveNavigator
+      Else
+         rs_ok = 0
+         OpenTextFile RSRANGE T 0 targets\range_dfmv.txt
+         If $reportedValue1 == 1
+            ReadLineToArray RSRANGE rs_vals
+            rs_ok = $reportedValue1
+            CloseTextFile RSRANGE
+         EndIf
+         If $rs_ok == 1
+            rs_drop = $rs_nav_items - $rs_vals[1] + 1
+            If $rs_drop > 0 AND $rs_vals[1] >= 3
+               Echo RESUME | removing $rs_drop crystal target item(s) from $rs_vals[1] on - the step-scan walks grid squares only
+               Loop $rs_drop
+                  DeleteNavigatorItem -1
+               EndLoop
+               RemoveFile targets\range_dfmv.txt
+               SaveNavigator
+            EndIf
+         EndIf
+      EndIf
+   EndIf
+EndIf
+
+# STEP 1: Montage (ALL modes)
+If $resume_from <= 1
+   Echo [1/$total_steps] Starting grid montage acquisition...
+   Call REyes_MNT
+   Echo [1/$total_steps] Grid montage completed successfully
+   Echo STAGE_DONE | stage=MNT
+Else
+   Echo [1/$total_steps] SKIPPED (resuming from stage $resume_from)
+EndIf
+
+# STEPS 2-5: Grid squares, eucentricity and step-scan (FSD and Screen)
 If $pipeline_mode == 1 or $pipeline_mode == 2
 
    # Step 2: Grid Square Finding
-   Echo [2/$total_steps] Finding grid squares in the montage...
-   Call ECNT_nav_ready
-   Echo [2/$total_steps] Grid squares found successfully
+   If $resume_from <= 2
+      Echo [2/$total_steps] Finding grid squares in the montage...
+      Call ECNT_nav_ready
+      Echo [2/$total_steps] Grid squares found successfully
+      Echo STAGE_DONE | stage=GRIDSQUARES
+   Else
+      Echo [2/$total_steps] SKIPPED (resuming from stage $resume_from)
+   Endif
 
    # Step 3: Eucentricity
-   Echo [3/$total_steps] Determining eucentricity for the grid...
-   Call REyes_ECNT
-   Echo [3/$total_steps] Eucentricity points determined successfully
+   If $resume_from <= 3
+      Echo [3/$total_steps] Determining eucentricity for the grid...
+      Call REyes_ECNT
+      Echo [3/$total_steps] Eucentricity points determined successfully
+      Echo STAGE_DONE | stage=ECNT
+   Else
+      Echo [3/$total_steps] SKIPPED (resuming from stage $resume_from)
+   Endif
 
    # Step 4: Eucentricity Analysis
+   If $resume_from <= 4
    Echo [4/$total_steps] Processing eucentricity data...
    Call ECNT_corrected
    Call REyes_postECNT
+   # REyes_postECNT does not save. Without this the navigator on DISK still
+   # holds the eucentricity points until the first grid square is finished,
+   # and a resume from a file would step-scan those instead.
+   SaveNavigator
    Echo [4/$total_steps] Eucentric plane found successfully
+   Echo STAGE_DONE | stage=POSTECNT
+   Else
+      Echo [4/$total_steps] SKIPPED (resuming from stage $resume_from)
+   Endif
 
    # Step 5: StepScan
-   Echo [5/$total_steps] Performing StepScan...
-   Call REyes_STPSCN
-   Echo [5/$total_steps] All grid squares mapped
+   If $resume_from > 5
+      Echo [5/$total_steps] SKIPPED (resuming from stage $resume_from)
+   Endif
+   If $resume_from <= 5
+      Echo [5/$total_steps] Performing StepScan...
+      Call REyes_STPSCN
+      # REyes_SpotGuard reports through a flag rather than Exit (an Exit inside
+      # the caller's Try block would lose the reason), so the verdict is read
+      # here. Without this check a grid whose StepScan refused to start would
+      # be reported as a success.
+      If $reyes_spot_ok == 0
+         Echo
+         Echo StepScan abandoned: the microscope is not in a usable state.
+         Echo NOTHING was mapped for this grid.
+         Echo
+         grid_results[$slotIndex] := FAILED
+         failure_reasons[$slotIndex] := Spot_guard_stopped_stepscan
+         failed_grids = $failed_grids + 1
+         partial_completion := 1
+         Return
+      Endif
+      # A grid square that failed is set aside and the step-scan goes on.
+      # Only a step-scan that left NO square with data fails the grid -- and
+      # then at once: there is nothing for REyes to find targets in, so waiting
+      # 25 min for targets.nav would only hold up the next grid.
+      If $stpscn_collected == 0
+         Echo
+         Echo StepScan finished with NO grid square mapped - every square was set aside.
+         Echo Not waiting for targets. See BLOCK_SKIPPED lines in the block logs.
+         Echo
+         grid_results[$slotIndex] := FAILED
+         failure_reasons[$slotIndex] := All_blocks_failed
+         failed_grids = $failed_grids + 1
+         partial_completion := 1
+         Return
+      Endif
+      grid_blocks_aside = $stpscn_set_aside
+      If $stpscn_set_aside > 0
+         Echo [5/$total_steps] $stpscn_set_aside grid square(s) set aside - continuing with the $stpscn_collected that have data
+      Endif
+      Echo [5/$total_steps] All grid squares mapped
+   Endif
 
 Endif
 
 # STEPS 6-7: Targets and Movies (FSD mode only)
 If $pipeline_mode == 1
    # Step 6: Wait for targets
-   Echo [6/7] Processing Diffraction Map...
-   Call Targets_nav_ready
+   If $resume_from <= 6
+      Echo [6/7] Processing Diffraction Map...
+      Call Targets_nav_ready
 
-   # Check if targets were found (persistent variable set by Targets_nav_ready)
-   If $targets_found == 0
-      Echo
-      Echo Skipping movie collection for this grid
-      Echo
-      grid_results[$slotIndex] := PARTIAL
-      failure_reasons[$slotIndex] := No_targets_found
-      partial_completion := 1
-      Echo PARTIAL SUCCESS: $current_sample completed screening but no targets for movies
+      # Check if targets were found (persistent variable set by Targets_nav_ready)
+      If $targets_found == 0
+         Echo
+         Echo Skipping movie collection for this grid
+         Echo
+         grid_results[$slotIndex] := PARTIAL
+         failure_reasons[$slotIndex] := No_targets_found
+         successful_grids = $successful_grids + 1
+         partial_completion := 1
+         Echo PARTIAL SUCCESS: $current_sample completed screening but no targets for movies
 
-      # Return early - main script will handle navigator closure and continue
-      Return
+         # Return early - main script will handle navigator closure and continue
+         Return
+      Endif
+
+      Echo [6/7] All targets identified successfully
+   Else
+      # REyes_DFMV exits by itself if targets\targets.nav is not there. If the
+      # targets are already in the navigator it resumes on the block recorded
+      # in targets\range_dfmv.txt and skips crystals that are already done.
+      Echo [6/7] SKIPPED (resuming from stage $resume_from)
    Endif
-
-   Echo [6/7] All targets identified successfully
 
    # Step 7: Diffraction Movie
    Echo [7/7] Collecting continuous rotation data...
    Call REyes_DFMV
+   If $reyes_spot_ok == 0
+      Echo
+      Echo Movie collection abandoned: the microscope is not in a usable state.
+      Echo NO rotation data was collected for this grid.
+      Echo
+      grid_results[$slotIndex] := FAILED
+      failure_reasons[$slotIndex] := Spot_guard_stopped_dfmv
+      failed_grids = $failed_grids + 1
+      partial_completion := 1
+      Return
+   Endif
+   grid_items_aside = $grid_items_aside + $dfmv_set_aside
    Echo [7/7] All movies collected
 
    Echo ====== FSD PIPELINE COMPLETED FOR $current_sample ======
@@ -1538,8 +1954,46 @@ ElseIf $pipeline_mode == 2
 ElseIf $pipeline_mode == 3
    Echo ====== MONTAGE COMPLETED FOR $current_sample ======
 Endif
-EndMacro
 
+# =============================================================================
+# ALWAYS LEAVE THE NAVIGATOR AND THE LOG ON DISK
+# =============================================================================
+# The last thing a grid does is write its state out. REyes_MNT does not save
+# the navigator itself, so a montage-only run would otherwise leave it only in
+# memory, and the log file could lag behind the run.
+#
+# Both commands are cheap and idempotent. The early Returns above (PARTIAL and
+# FAILED paths) deliberately bypass this: those already saved what they had, and
+# the summary records the reason.
+#
+# A GRID THAT SET SOMETHING ASIDE IS STILL A SUCCESS, and says so. It is
+# recorded here (partial_completion := 1 tells START_REYES the outcome is
+# already written) so that the count reaches the summary line, e.g.
+#     Slot 2 (mysample-reyes): SUCCESS - Blocks_set_aside_1
+
+# Each piece of literal text is its own variable so no name can absorb the
+# text after it (see the log-naming note in START_REYES).
+grid_aside_total = $grid_blocks_aside + $grid_items_aside
+If $grid_aside_total > 0
+   sa_blocks_txt @= Blocks_set_aside_
+   sa_items_txt @= Items_set_aside_
+   sa_sep @= _
+   grid_results[$slotIndex] := SUCCESS
+   If $grid_blocks_aside > 0 AND $grid_items_aside > 0
+      failure_reasons[$slotIndex] := $sa_blocks_txt$grid_blocks_aside$sa_sep$sa_items_txt$grid_items_aside
+   ElseIf $grid_blocks_aside > 0
+      failure_reasons[$slotIndex] := $sa_blocks_txt$grid_blocks_aside
+   Else
+      failure_reasons[$slotIndex] := $sa_items_txt$grid_items_aside
+   Endif
+   successful_grids = $successful_grids + 1
+   partial_completion := 1
+   Echo SUCCESS: $current_sample completed - $grid_blocks_aside grid square(s) and $grid_items_aside item(s) set aside
+Endif
+
+SaveNavigator
+SaveLog
+EndMacro
 Macro	8
 MacroName Manual_Pipeline_Part1
 
@@ -1579,13 +2033,22 @@ Echo
 Echo Montage complete - returning to main script for manual selection
 Echo
 EndMacro
-
 Macro	9
 MacroName Manual_Pipeline_Part2
 
 # PART 2 of Manual Pipeline (after Pause)
 # This continues the pipeline after user has manually selected grid squares
 # Assumes Pause has already happened in main script
+#
+# The step-scan and the movies set a failed grid square / crystal aside and go
+# on (REyes_STPSCN / REyes_DFMV). A step-scan that
+# left NO square with data fails the grid as All_blocks_failed at once, without
+# waiting for targets; a grid that set something aside is recorded as SUCCESS
+# with the count in the reason (Blocks_set_aside_N / Items_set_aside_N), as in
+# Automated_Pipeline_Helper.
+
+grid_blocks_aside = 0
+grid_items_aside = 0
 
 Echo
 Echo ================================================
@@ -1637,6 +2100,36 @@ Echo [4/$total_steps] Eucentric plane found successfully
 # Step 5: StepScan
 Echo [5/$total_steps] Performing StepScan...
 Call REyes_STPSCN
+# REyes_SpotGuard reports through a flag rather than Exit, so the verdict is
+# read here, exactly as the automated path reads it in
+# Automated_Pipeline_Helper. Without this the manual workflow would print
+# "All grid squares mapped" for a grid the guard had just stopped.
+If $reyes_spot_ok == 0
+   Echo
+   Echo StepScan abandoned: the microscope is not in a usable state.
+   Echo NOTHING was mapped for this grid.
+   Echo
+   grid_results[$slotIndex] := FAILED
+   failure_reasons[$slotIndex] := Spot_guard_stopped_stepscan
+   failed_grids = $failed_grids + 1
+   partial_completion := 1
+   Return
+Endif
+If $stpscn_collected == 0
+   Echo
+   Echo StepScan finished with NO grid square mapped - every square was set aside.
+   Echo Not waiting for targets. See BLOCK_SKIPPED lines in the block logs.
+   Echo
+   grid_results[$slotIndex] := FAILED
+   failure_reasons[$slotIndex] := All_blocks_failed
+   failed_grids = $failed_grids + 1
+   partial_completion := 1
+   Return
+Endif
+grid_blocks_aside = $stpscn_set_aside
+If $stpscn_set_aside > 0
+   Echo [5/$total_steps] $stpscn_set_aside grid square(s) set aside - continuing with the $stpscn_collected that have data
+Endif
 Echo [5/$total_steps] All grid squares mapped
 
 # STEPS 6-7: Targets and Movies (Manual FSD mode only)
@@ -1652,6 +2145,7 @@ If $pipeline_mode == 1
       Echo
       grid_results[$slotIndex] := PARTIAL
       failure_reasons[$slotIndex] := No_targets_found
+      successful_grids = $successful_grids + 1
       partial_completion := 1
       Echo PARTIAL SUCCESS: $current_sample completed screening but no targets for movies
       Echo Status: PARTIAL - Screening completed but no targets for movies
@@ -1667,6 +2161,18 @@ If $pipeline_mode == 1
    # Step 7: Diffraction Movie
    Echo [7/7] Collecting continuous rotation data...
    Call REyes_DFMV
+   If $reyes_spot_ok == 0
+      Echo
+      Echo Movie collection abandoned: the microscope is not in a usable state.
+      Echo NO rotation data was collected for this grid.
+      Echo
+      grid_results[$slotIndex] := FAILED
+      failure_reasons[$slotIndex] := Spot_guard_stopped_dfmv
+      failed_grids = $failed_grids + 1
+      partial_completion := 1
+      Return
+   Endif
+   grid_items_aside = $grid_items_aside + $dfmv_set_aside
    Echo [7/7] All movies collected
 
    Echo
@@ -1679,8 +2185,28 @@ ElseIf $pipeline_mode == 2
    Echo ===== MANUAL SCREEN PIPELINE COMPLETED =====
    Echo ================================================
 Endif
-EndMacro
 
+# A grid that set something aside is still a SUCCESS, with the count in
+
+# the reason -- see the same block at the end of Automated_Pipeline_Helper.
+grid_aside_total = $grid_blocks_aside + $grid_items_aside
+If $grid_aside_total > 0
+   sa_blocks_txt @= Blocks_set_aside_
+   sa_items_txt @= Items_set_aside_
+   sa_sep @= _
+   grid_results[$slotIndex] := SUCCESS
+   If $grid_blocks_aside > 0 AND $grid_items_aside > 0
+      failure_reasons[$slotIndex] := $sa_blocks_txt$grid_blocks_aside$sa_sep$sa_items_txt$grid_items_aside
+   ElseIf $grid_blocks_aside > 0
+      failure_reasons[$slotIndex] := $sa_blocks_txt$grid_blocks_aside
+   Else
+      failure_reasons[$slotIndex] := $sa_items_txt$grid_items_aside
+   Endif
+   successful_grids = $successful_grids + 1
+   partial_completion := 1
+   Echo SUCCESS: $current_sample completed - $grid_blocks_aside grid square(s) and $grid_items_aside item(s) set aside
+Endif
+EndMacro
 Macro	10
 MacroName REyes_Setup_Automated
 
@@ -1740,7 +2266,6 @@ Else
    Echo Proceeding with acquisition...
 Endif
 EndMacro
-
 Macro	11
 MacroName REyes_Setup_Optional
 
@@ -1752,7 +2277,6 @@ Echo Montage-only mode selected - REyes NOT required
 Echo Proceeding directly to acquisition...
 Echo ================================================
 EndMacro
-
 Macro	13
 ScriptName BatchED_Rotation_CETA
 
@@ -1911,7 +2435,6 @@ Loop $nitems
 
 EndLoop
 EndMacro
-
 Macro	14
 ScriptName BatchED_Still_CETA
 
@@ -1998,7 +2521,6 @@ Loop $nitems
 
 EndLoop
 EndMacro
-
 Macro	15
 ScriptName BatchED_MultiAngle_CETA
 
@@ -2105,7 +2627,6 @@ Loop $nitems
 
 EndLoop
 EndMacro
-
 Macro	16
 ScriptName BatchED_Imaging_CETA
 
@@ -2175,7 +2696,6 @@ Loop $nitems
 
 EndLoop
 EndMacro
-
 Macro	19
 MacroName AutoloaderScreen
 
@@ -2218,7 +2738,6 @@ EndLoop
 
 SetColumnOrGunValve 0
 EndMacro
-
 Macro	30
 MacroName REyes_MNT
 
@@ -2360,16 +2879,19 @@ Endif
 SaveNavigator
 SaveLog
 EndMacro
-
 Macro	31
 MacroName REyes_ECNT
 
 ################BEFORE STARTING###############
 #  CHECK THAT FINE EUCENTRIC WILL RUN IN VIEW
-#  TURN ON LOW DOSE IN SERIALEM
-#  grid_squares\eucentricity.nav IS WRITTEN BY REYES
-#  RUN FROM START_REYES OR AFTER REYES_Setup_Standalone
+#  2
+#  3
+#  4
 ###################SETTINGS###################
+#
+# Ceta View settings: 1.5 s, bin 2, no frame time. nitems is persistent (':='),
+# as in REyes_postECNT / REyes_STPSCN / BatchED_Main_CETA, and the navigator
+# move waits for the stage and retries.
 
 
 
@@ -2454,7 +2976,32 @@ Loop $nitems
 
    posct = $posct + 1
 
-   MoveToNavItem $posct
+   # --- stage-safe move: wait while the stage is busy, retry 5 times ---
+
+   move_ok = 0
+   Loop 5
+      Loop 60
+         ReportStageBusy
+         If $reportedValue1 == 0
+            Break
+         EndIf
+         Delay 1 sec
+      EndLoop
+      Try
+         MoveToNavItem $posct
+         move_ok = 1
+      Catch
+         Echo STAGE_RETRY | the stage refused: MoveToNavItem $posct
+         Echo STAGE_RETRY | waiting 20 s before trying again
+         Delay 20 sec
+      EndTry
+      If $move_ok == 1
+         Break
+      EndIf
+   EndLoop
+   If $move_ok == 0
+      Exit The stage stayed busy or not ready through 5 attempts: MoveToNavItem $posct
+   EndIf
 
    Echo Moved to Navigator item $posct
 
@@ -2488,18 +3035,41 @@ SetColumnOrGunValve 0
 SaveNavigator
 SaveLog
 EndMacro
-
 Macro	32
 MacroName REyes_STPSCN
 
-################BEFORE STARTING###############
-#  TURN ON LOW DOSE IN SERIALEM
-#  RECORD: DIFFRACTION UNDER PARALLEL BEAM CONDITION
-#  NAVIGATOR: MONTAGE MAP FOLLOWED BY GRID SQUARES
-#  RUN FROM START_REYES OR AFTER REYES_Setup_Standalone
-###################SETTINGS###################
-
-
+# =============================================================================
+# REyes_STPSCN  (Ceta)
+# =============================================================================
+# The Ceta StepScan: 1 s, bin 2, SerialEM writes one MRC per pattern.
+#   - A FAILED GRID SQUARE LOSES ONLY ITSELF. Each square runs in its own Try;
+#     a square that raised an error, or finished with the column valve closed,
+#     is SET ASIDE: no done flag, no navigator note, its folder renamed
+#     <sample>_<N>-SKIPPED or -VALVECLOSED, the valve re-opened, and its block
+#     log carries
+#       BLOCK_SKIPPED | stage=STPSCN | square=N | item=I | reason=R
+#     instead of the per-square completion phrase. The grid goes on. There is
+#     no consecutive-failure breaker: every square is tried.
+#   - RESUME: a square whose folder carries stpscn_done.flag is skipped.
+#   - After the loop: STPSCN_RESULT | result=complete|partial|failed, and the
+#     all-squares phrase only when at least one square has data. Zero squares
+#     -> no phrase, $stpscn_collected := 0 and Return: the CALLER fails the
+#     grid (All_blocks_failed) without waiting for targets.
+#   - The spot guard (REyes_SpotGuard) replaces the bare GoToLowDoseArea R.
+#
+# CETA ACQUISITION:
+#   SetExposure R 1 / SetBinning R 2, no frame time, and SerialEM writes the
+#   file itself -- no staging folder, no copy:
+#
+#   FROZEN SEQUENCE -- NOTHING MAY BE INSERTED BETWEEN THESE SIX LINES:
+#       OpenNewFile / ReportCurrentFilename / Record / Save / CloseFile /
+#       ReportStageXYZ
+#   dif-map finds the log line naming the MRC ("Current open image file is:
+#   ...mrc", printed by ReportCurrentFilename) and reads "Stage x y z" EXACTLY
+#   serialEM_log = 2 lines later (Arctica-CETA), the line between being
+#   "Saved Z = 0". Anything that prints in between costs that frame its
+#   coordinates, silently.
+# =============================================================================
 
 ##############LOCATIONS AND NAMES#############
 
@@ -2534,6 +3104,11 @@ Endif
 
 Echo Chosen directory: $set_directory
 Echo Current sample: $samplename
+
+# Results for the caller (Automated_Pipeline_Helper / Manual_Pipeline_Part2),
+# reset before anything can return so a grid never reads the previous grid's.
+stpscn_collected := 0
+stpscn_set_aside := 0
 
 ReportIfNavOpen
 nav_file_open = $reportedValue1
@@ -2581,72 +3156,318 @@ SetColumnOrGunValve 1
 SetBeamBlank 0
 ScreenUp
 
-GoToLowDoseArea R
+# =============================================================================
+# SPOT SIZE GUARD -- REyes_SpotGuard (slot 34), replaces a bare GoToLowDoseArea
+# =============================================================================
+# GoToLowDoseArea R is a silent no-op when Low Dose is off, and SpotSize is
+# recorded only in the per-frame .mdoc. Run from the orchestrator the expected
+# spot (Setup_Helper) is enforced; run standalone it is recorded, not judged.
+# Low Dose being off is fatal either way.
+stage_name @= STPSCN
+IsVariableDefined spot_expected
+If $reportedValue1 == 0
+   stage_spot_expected := 0
+Else
+   stage_spot_expected := $spot_expected
+Endif
+Call REyes_SpotGuard
+If $reyes_spot_ok == 0
+   Echo StepScan abandoned by the spot guard -- see the reason above
+   Return
+Endif
 
+# CETA RECORD SETTINGS (1 s, bin 2).
 SetContinuous R 0
 SetExposure R 1
 SetBinning R 2
 
+# The done flag is written only if the column valve is still open when the
+# square finishes; a square exposed with the valve closed holds blank frames.
+# Regular (not persistent) and set on every run, so no value left over from an
+# earlier run in the same SerialEM session can switch the check off.
+valve_check = 1
+n_valve_lost = 0
+
+# --- Resume accounting -------------------------------------------------------
+n_collected = 0
+n_skipped = 0
+n_set_aside = 0
+
+IsVariableDefined stpscn_redo_all
+If $reportedValue1 == 0
+   EnterDefaultedNumber 0 -1 Resume mode: 0 = skip grid squares already mapped, 1 = redo all:
+   stpscn_redo_all := $reportedValue1
+Endif
 
 Loop $nitems
 
    posname = $posct
-
-   SaveLogOpenNew $samplename_$posname
-   #SetFolderForFrames $samplename_$posname
-   MakeDirectory $samplename_$posname
-
+   # posct is advanced FIRST: it is this square's navigator item from here on --
+   # the item MoveToNavItem goes to and the item a BLOCK_SKIPPED record names.
+   # Navigator item 1 is the montage map, so the squares start at item 2 and
+   # posname (the FOLDER number) is posct - 1.
    posct = $posct + 1
-   MoveToNavItem $posct
 
-   ReportStageXYZ
+   # sq_state: 0 = to be mapped now, 1 = mapped by an earlier run (resume),
+   #           2 = mapped now, 3 = SET ASIDE (valve closed or an error)
+   sq_state = 0
+   sq_valve = 0
+   sq_file_open = 0
+   sq_phase @= resume_check
 
-   Delay 1 sec
+   # ===========================================================================
+   # ONE SQUARE, INSIDE ITS OWN Try
+   # ===========================================================================
+   # Any error in here -- a COM error from the microscope, a stage that stays
+   # busy through every move attempt, a file that cannot be written --
+   # jumps to the Catch below and costs THIS square only. Nothing in here may
+   # Break or Continue out to the square loop (SerialEM block-scan traps); the
+   # outcome is carried out in $sq_state instead.
+   Try
+      # --- RESUME: skip grid squares a previous run already finished ----------
+      # Tested BEFORE SaveLogOpenNew, so a skipped square does not get a second,
+      # empty block log -- the monitor reads those by name and the earlier one
+      # already carries its completion phrase.
+      DoesFileExist $set_directory\$samplename_$posname\stpscn_done.flag
+      If $reportedValue1 == 1 AND $stpscn_redo_all == 0
+         sq_state = 1
+         n_skipped = $n_skipped + 1
+         Echo RESUME | stage=STPSCN | square=$posname | action=skipped
+         ChangeItemNote $posct REYES_DONE_STPSCN
+      Endif
 
-   x_temp = $offset_x - ( $half_loopsx * $increment_x )
-   y_temp = $offset_y - ( $half_loopsy * $increment_y )
+      If $sq_state == 0
+         sq_phase @= open_log
+         SaveLogOpenNew $samplename_$posname
+         # CETA: SerialEM writes the patterns straight into this folder.
+         MakeDirectory $samplename_$posname
 
-   MoveStage $x_temp $y_temp
+         # Re-open the column valve if something closed it since the last square.
+         sq_phase @= valve_reopen
+         If $valve_check == 1
+            ReportColumnOrGunValve
+            If $reportedValue1 != 1
+               Echo VALVE_REOPENED | stage=STPSCN | square=$posname
+               SetColumnOrGunValve 1
+               Delay 2 sec
+            Endif
+         Endif
 
-   Loop $num_loopsy
-
-      Delay 1 sec
-
-      Loop $num_loopsx
-
-         imgnum = $imgnum + 1
-         MoveStage $increment_x 0
-
-         Delay 1 sec
-
-         OpenNewFile $samplename_$posname\$yyyymmdd_$imgnum_integrated_movie$mrc_ext
-         ReportCurrentFilename
-         Record
-         Save
-         CloseFile
+         sq_phase @= move
+         # --- stage-safe move: wait while the stage is busy, retry 5 times ---
+         move_ok = 0
+         Loop 5
+            Loop 60
+               ReportStageBusy
+               If $reportedValue1 == 0
+                  Break
+               EndIf
+               Delay 1 sec
+            EndLoop
+            Try
+               MoveToNavItem $posct
+               move_ok = 1
+            Catch
+               Echo STAGE_RETRY | the stage refused: MoveToNavItem $posct
+               Echo STAGE_RETRY | waiting 20 s before trying again
+               Delay 20 sec
+            EndTry
+            If $move_ok == 1
+               Break
+            EndIf
+         EndLoop
+         If $move_ok == 0
+            Throw The stage stayed busy or not ready through 5 attempts: MoveToNavItem $posct
+         EndIf
 
          ReportStageXYZ
 
-      EndLoop
+         Delay 1 sec
 
-      MoveStage (-1 * $num_loopsx * $increment_x ) $increment_y
-      ReportClock
+         x_temp = $offset_x - ( $half_loopsx * $increment_x )
+         y_temp = $offset_y - ( $half_loopsy * $increment_y )
 
-   EndLoop
+         MoveStage $x_temp $y_temp
+
+         sq_phase @= acquire
+         Loop $num_loopsy
+
+            Delay 1 sec
+
+            Loop $num_loopsx
+
+               imgnum = $imgnum + 1
+               MoveStage $increment_x 0
+
+               Delay 1 sec
+
+               # ===============================================================
+               # FROZEN SEQUENCE -- NOTHING MAY SIT BETWEEN THESE SIX LINES.
+               # See the header: dif-map reads "Stage x y z" exactly two log
+               # lines after "Current open image file is: ...mrc".
+               # sq_file_open is set BEFORE and cleared AFTER the six lines, so
+               # that a square failing with its file open closes it on set-aside.
+               # ===============================================================
+               sq_file_open = 1
+               OpenNewFile $samplename_$posname\$yyyymmdd_$imgnum_integrated_movie$mrc_ext
+               ReportCurrentFilename
+               Record
+               Save
+               CloseFile
+               ReportStageXYZ
+               sq_file_open = 0
+
+            EndLoop
+
+            MoveStage (-1 * $num_loopsx * $increment_x ) $increment_y
+            ReportClock
+
+         EndLoop
+
+         # --- VALVE CHECK, before the done flag ---------------------------------
+         # A square exposed with the valve closed is not flagged and not noted,
+         # so it stays NOT done and a resume maps it again. It is set aside
+         # below, together with the squares that raised an error.
+         sq_phase @= valve_check
+         stp_valve_ok = 1
+         If $valve_check == 1
+            ReportColumnOrGunValve
+            If $reportedValue1 != 1
+               stp_valve_ok = 0
+            Endif
+         Endif
 
 
+         If $stp_valve_ok == 0
+            sq_valve = 1
+            sq_state = 3
+         Else
+            # Marker for the resume check above.
+            sq_phase @= done_flag
+            OpenTextFile STPDONE O 0 $set_directory\$samplename_$posname\stpscn_done.flag
+            WriteLineToFile STPDONE done
+            CloseTextFile STPDONE
+            # Per-square navigator status. posct is the item MoveToNavItem went to.
+            ChangeItemNote $posct REYES_DONE_STPSCN
+            # The square is DONE from here on: an error after this line must
+            # not set it aside (its flag is written and its data are on disk).
+            sq_state = 2
+            n_collected = $n_collected + 1
 
+            Echo Completed StepScan for current grid square
+         Endif
+      Endif
+   Catch
+      # A square that already has its done flag and its completion phrase is
+      # kept; only a square that did not get that far is set aside.
+      If $sq_state != 2 AND $sq_state != 1
+         sq_state = 3
+      Endif
+   EndTry
 
+   # --- SET ASIDE: valve closed or an error -- this square only -----------------
+   # No done flag, no note; an image file left open by the error is closed; the
+   # square's folder is renamed out of the way, so a resume maps it into a clean
+   # <sample>_<N> folder and REyes never mixes a half square with a full one;
+   # the valve is re-opened. Every command that touches the scope or the disk
+   # has its own Try, so cleaning up one square can never cost the next one.
+   If $sq_state == 3
+      n_set_aside = $n_set_aside + 1
+      If $sq_valve == 1
+         n_valve_lost = $n_valve_lost + 1
+         sq_reason @= valve_closed
+         sq_suffix @= -VALVECLOSED
+         Echo VALVE_CLOSED | stage=STPSCN | square=$posname | action=not_marked_done
+         Echo WARNING: the column valve was closed when square $posname finished.
+         Echo          Its patterns are set aside; it will be mapped again on a resume.
+      Else
+         sq_reason @= error_$sq_phase
+         sq_suffix @= -SKIPPED
+         Echo WARNING: grid square $posname failed during $sq_phase and is set aside.
+         Echo          The grid goes on; it will be mapped again on a resume.
+      Endif
+      Echo BLOCK_SKIPPED | stage=STPSCN | square=$posname | item=$posct | reason=$sq_reason
+      If $sq_file_open == 1
+         Try
+            CloseFile
+         Catch
+            Echo WARNING: could not close the open image file of grid square $posname
+         EndTry
+      Endif
+      Try
+         RunInShell cmd /c ren "$set_directory\$samplename_$posname" "$samplename_$posname$sq_suffix"
+      Catch
+         Echo WARNING: could not rename the folder of grid square $posname
+      EndTry
+      Try
+         SetColumnOrGunValve 1
+         Delay 2 sec
+      Catch
+         Echo WARNING: could not re-open the column valve after grid square $posname
+      EndTry
+   Endif
 
-
-   Echo Completed StepScan for current grid square
-   SaveLog
+   If $sq_state >= 2
+      Try
+         SaveNavigator
+         SaveLog
+      Catch
+         Echo WARNING: could not save the navigator or the log after grid square $posname
+      EndTry
+   Endif
 
 EndLoop
 
 Echo STOPPING
 
 ReportClock
+
+# set_aside is appended LAST, so field-keyed parsers of this record are unaffected.
+Echo STPSCN_SUMMARY | squares=$nitems | collected=$n_collected | skipped=$n_skipped | set_aside=$n_set_aside
+Echo STPSCN_CHECKS | camera=CETA | exposure=1 | binning=2 | valve_lost=$n_valve_lost
+
+# =============================================================================
+# THE RESULT, AND THE GATED COMPLETION PHRASE
+# =============================================================================
+# REyes stops watching the diffraction map when it sees the all-squares
+# phrase, so it is printed only when at least one square has data:
+#   complete  every square has data (mapped now or by an earlier run)
+#   partial   at least one square has data, at least one was set aside
+#   failed    no square has data -- the phrase is NOT printed, and the caller
+#             fails the grid as All_blocks_failed without waiting for targets
+n_with_data = $n_collected + $n_skipped
+If $nitems <= 0 OR $n_with_data == 0
+   stp_result @= failed
+ElseIf $n_set_aside > 0
+   stp_result @= partial
+Else
+   stp_result @= complete
+Endif
+Echo STPSCN_RESULT | result=$stp_result | collected=$n_with_data | set_aside=$n_set_aside
+stpscn_collected := $n_with_data
+stpscn_set_aside := $n_set_aside
+
+If $nitems <= 0 OR $n_with_data == 0
+   Echo
+   Echo ############################################################
+   Echo # NOT reporting completion: NO grid square has data.
+   Echo #   squares=$nitems  mapped=$n_collected  skipped=$n_skipped  set_aside=$n_set_aside
+   Echo # Either the navigator held no grid squares, or every square
+   Echo # failed. The grid is FAILED (All_blocks_failed). Re-run to map
+   Echo # them again; squares already mapped are skipped.
+   Echo ############################################################
+   Echo
+   ScreenDown
+   SetBeamBlank 1
+   SetColumnOrGunValve 0
+   SaveNavigator
+   SaveLog
+   Return
+Endif
+
+If $n_set_aside > 0
+   Echo $n_set_aside of $nitems grid square(s) set aside - the grid goes on with the other $n_with_data
+Endif
 
 Echo Completed StepScan for all grid squares
 
@@ -2659,18 +3480,42 @@ SetColumnOrGunValve 0
 SaveNavigator
 SaveLog
 EndMacro
-
 Macro	33
 MacroName REyes_DFMV
 
-################BEFORE STARTING###############
-#  TURN ON LOW DOSE IN SERIALEM
-#  RECORD: DIFFRACTION UNDER PARALLEL BEAM CONDITION
-#  targets\targets.nav IS WRITTEN BY REYES
-#  RUN FROM START_REYES OR AFTER REYES_Setup_Standalone
-###################SETTINGS###################
-
-
+# =============================================================================
+# REyes_DFMV  (Ceta)
+# =============================================================================
+# The Ceta continuous-rotation movie (SerialEM saves frame by frame during the
+# tilt):
+#   - A FAILED MOVIE LOSES ONLY ITSELF. Each crystal runs in its own Try; a
+#     crystal that raised an error, or whose movie finished with the column
+#     valve closed, is set aside (ITEM_SKIPPED | stage=DFMV | item= | reason=):
+#     no done flag, no note, continuous mode stopped, the open file closed, its
+#     movie folder renamed -SKIPPED / -VALVECLOSED, stage tilted back to 0,
+#     valve re-opened. The loop goes on.
+#   - RESUME: a crystal whose movie folder carries dfmv_done.flag is skipped;
+#     the merged target block is recorded in targets\range_dfmv.txt, so a
+#     re-run against a navigator that already holds the targets resumes on the
+#     same block instead of collecting nothing (the re-merge trap below).
+#   - "Movie folder:" / "Acquired movie:" are printed only after the valve
+#     check, so REyes is never told about a valve-closed movie.
+#   - The end phrase "Completed acquiring tilt movies for all crystals!" is
+#     ALWAYS printed once the loop has run, so the monitor is never left
+#     waiting; a run where NO crystal has a movie then ends with Exit.
+#   - The spot guard (REyes_SpotGuard) checks Low Dose and the spot size.
+#
+# THE ROTATION IS HARD-CODED, ON PURPOSE.
+#   rotrate 0.3 deg/s and rotincr 0.004 are NOMINAL. With 3 s frames the Ceta
+#   needs ~4.4 s to read out and save each frame while the stage keeps turning,
+#   so frames start 7.4 s apart and the stage really turns at about 0.12 deg/s:
+#   0.889 deg between frame starts, of which 0.36 deg is exposed. Movies taken
+#   this way integrate with OSCILLATION_RANGE 0.9, and index and solve.
+#   The movie folder name (..._0.3dps_0.33fps_...) and movie name
+#   (..._<dist>_0.3_3_...) must keep this exact form: the processing reads the
+#   rotation from them.
+#   There is a 120 s settle after each movie and a 900 s wait at the end.
+# =============================================================================
 
 ##############LOCATIONS AND NAMES#############
 
@@ -2707,6 +3552,9 @@ Endif
 Echo Chosen directory: $set_directory
 Echo Current sample: $samplename
 
+# Result for the grid summary, reset before anything can return.
+dfmv_set_aside := 0
+
 ReportIfNavOpen
 nav_file_open = $reportedValue1
 
@@ -2715,7 +3563,13 @@ If $nav_file_open == 0
 
 Endif
 
-#CHECK NUMBER OF GRID SQUARES IN NAVIGATOR
+# =============================================================================
+# THE TARGET BLOCK
+# =============================================================================
+# This macro merges targets\targets.nav itself and derives the count by
+# differencing, as REyes always has. A fresh merge records which navigator
+# items it added in targets\range_dfmv.txt; a re-run against a navigator that
+# already holds them merges nothing, and then the recorded block is read back.
 
 ReportNumTableItems
 
@@ -2744,6 +3598,52 @@ nitems := $all_items - $nsqrs
 
 Echo Current number of crystal targets: $nitems
 
+If $nitems > 0
+   dfmv_rng_first = $nsqrs + 1
+   MakeDirectory targets
+   OpenTextFile DFMVRNG O 0 targets\range_dfmv.txt
+   WriteLineToFile DFMVRNG $dfmv_rng_first $all_items
+   CloseTextFile DFMVRNG
+   Echo DFMV_RANGE | first_item=$dfmv_rng_first | last_item=$all_items | source=merge
+Else
+   OpenTextFile DFMVRNG T 0 targets\range_dfmv.txt
+   If $reportedValue1 == 1
+      ReadLineToArray DFMVRNG dfmv_rng
+      dfmv_rng_read = $reportedValue1
+      CloseTextFile DFMVRNG
+      If $dfmv_rng_read == 1
+         nsqrs = $dfmv_rng[1] - 1
+         nitems := $dfmv_rng[2] - $dfmv_rng[1] + 1
+         Echo DFMV_RANGE | first_item=$dfmv_rng[1] | last_item=$dfmv_rng[2] | source=file
+         Echo The targets were merged by an earlier run - resuming on the same block
+         Echo Current number of crystal targets: $nitems
+      Endif
+   Endif
+Endif
+
+# RE-MERGE TRAP -- a silent no-op. With 0 targets the loop below
+# would run zero times and fall through to the terminal phrase, which REyes
+# reads as "all movies collected". Stop here instead.
+If $nitems <= 0
+   Echo
+   Echo ############################################################
+   Echo # STOPPING: NO NEW TARGETS WERE MERGED
+   Echo #
+   Echo # $targets_file_name added 0 items, which means this navigator
+   Echo # already contains them -- almost always a re-run after a pause --
+   Echo # and targets\range_dfmv.txt, which records the block an earlier
+   Echo # merge added, was not found either.
+   Echo #
+   Echo # NOTHING HAS BEEN COLLECTED. Choose one:
+   Echo #   - to resume, delete the merged target items from the navigator
+   Echo #     and run again: crystals whose folder carries dfmv_done.flag
+   Echo #     are skipped
+   Echo #   - to start over, do the same and answer 1 to "redo all"
+   Echo ############################################################
+   Echo
+   Exit No new targets merged - nothing collected, see the log
+Endif
+
 offset = $nsqrs
 
 Echo Offset: $offset
@@ -2751,7 +3651,36 @@ Echo Offset: $offset
 xtalct := $offset
 
 
+# =============================================================================
+# COLUMN, SCREEN AND SPOT GUARD -- before the settings, so that $spsz (baked
+# into the folder and movie names) is the spot the movies are taken at.
+# =============================================================================
+SetColumnOrGunValve 1
+SetBeamBlank 0
+ScreenUp
+
+stage_name @= DFMV
+IsVariableDefined dfmv_spot_expected
+If $reportedValue1 == 1
+   stage_spot_expected := $dfmv_spot_expected
+Else
+   IsVariableDefined spot_expected
+   If $reportedValue1 == 1
+      stage_spot_expected := $spot_expected
+   Else
+      stage_spot_expected := 0
+   Endif
+Endif
+Call REyes_SpotGuard
+If $reyes_spot_ok == 0
+   Echo Movie collection abandoned by the spot guard -- see the reason above
+   Return
+Endif
+
+
 ##############DIFF MOVIE SETTINGS#############
+# Persistent (':='), like BatchED_Main_CETA, which sets the same names: a
+# regular '=' here would be refused after a BatchED run in the same session.
 
 #ROTATION SETTINGS
 startangle := $selected_tilt
@@ -2759,36 +3688,26 @@ finalangle := -$selected_tilt
 range := P$startangletoN$finalangle
 tiltrange := $selected_tilt * 2
 nsweeps := 1
-ReportSpotSize
-spsz := $reportedValue1
+spsz := $reyes_spot_actual
+# Nominal values, hard-coded for CETA -- see the header. The REAL stage rate
+# is 0.12 deg/s; 0.33 (frames per second at 3 s per frame) only names the folder.
 rotrate := 0.3
-rotincr := 0.004 #calibrated for Ceta frame saving at 0.3 dps; nominal is 0.033 * $rotrate (0.033=1dps, 0.066=2dps)
+rotincr := 0.004
 acqrate := 0.33
 ReportCameraLength
 dist := $reportedValue1 * 1000
 temp := c #c for cryo or rt for room temp
 
-
-
-
-
-
-
-
 Echo Talos camera length is $dist
 
 
+############RUN DIFFRACTION MOVIES IN RECORD############
 
-############RUN STEPSCAN IN RECORD############
-
-SetColumnOrGunValve 1
-SetBeamBlank 0
-ScreenUp
-
+# CETA RECORD SETTINGS: continuous, 3 s per frame, bin 2. SerialEM saves each
+# frame (no frame time).
 SetContinuous R 1
 SetExposure R 3
 SetBinning R 2
-
 
 ReportExposure R
 expsr = $reportedValue1
@@ -2796,75 +3715,269 @@ expsr = $reportedValue1
 movtime = ($startangle - $finalangle) / $rotrate
 nframes = ($startangle - $finalangle) / ($rotrate * $expsr)
 
+Echo DFMV_ROTATION | camera=CETA | rotrate_nominal=$rotrate | rotincr=$rotincr | frame_exposure=$expsr | nframes=$nframes | real_rate=0.12 | deg_per_frame=0.89 | deg_exposed=0.36
+
 MakeDirectory movies
 movnum = 20000
 Delay 2 sec
 
+# --- Resume accounting -------------------------------------------------------
+# Every iteration collects, skips (done earlier) or sets the crystal aside.
+n_collected = 0
+n_skipped = 0
+n_set_aside = 0
+
+# The done flag is written only if the column valve is still open when the
+# movie finishes. Regular and set on every run, so no value left over from an
+# earlier run in the same SerialEM session can switch the check off.
+valve_check = 1
+n_valve_lost = 0
+
+IsVariableDefined dfmv_redo_all
+If $reportedValue1 == 0
+   EnterDefaultedNumber 0 -1 Resume mode: 0 = skip crystals already collected, 1 = redo all:
+   dfmv_redo_all := $reportedValue1
+Endif
+
+
+# =============================================================================
+# EVERY CRYSTAL IN ITS OWN Try -- a failed movie loses only itself
+# =============================================================================
+# The outcome is carried in $item_state (0 to do, 1 done earlier, 2 collected
+# now, 3 set aside); nothing in the loop Breaks or Continues out of the Try.
+# item_streaming / item_file_open say what the set-aside must undo.
 Loop $nitems
-   movnum = $movnum + 1
    xtalct := $xtalct + 1
+   movnum = $movnum + 1
    sweepcnt = 1
    movdir = $samplename_$distmm_sp$spsz_$rotratedps_$acqratefps_$range_mov$xtalct_sweep$sweepcnt_$temp
-   MakeDirectory movies\$movdir
-   #SetFolderForFrames $movdir
    movname = $samplename-mov$xtalct_$dist_$rotrate_$expsr_$range_g8sp$spsz_$temp$mrc_ext
-   MoveToNavItem $xtalct
+   item_state = 0
+   item_valve = 0
+   item_streaming = 0
+   item_file_open = 0
+   item_phase @= resume_check
+   dfmv_valve_ok = 1
 
-   Loop $nsweeps
-      sweepcnt = $sweepcnt + 1
-      TiltTo $startangle
-      Delay 1 sec
-      ReportTiltAngle
-      GoToLowDoseArea R
-      UseContinuousFrames 1
+   Try
+      # --- RESUME: skip crystals a previous run already finished ---------------
+      DoesFileExist $set_directory\movies\$movdir\dfmv_done.flag
+      If $reportedValue1 == 1 AND $dfmv_redo_all == 0
+         item_state = 1
+         n_skipped = $n_skipped + 1
+         Echo RESUME | stage=DFMV | item=$xtalct | action=skipped | folder=$movdir
+         SaveLog
+      Endif
 
+      If $item_state == 0
+         # Re-open the column valve if something closed it since the last crystal.
+         item_phase @= valve_reopen
+         If $valve_check == 1
+            ReportColumnOrGunValve
+            If $reportedValue1 != 1
+               Echo VALVE_REOPENED | stage=DFMV | item=$xtalct
+               SetColumnOrGunValve 1
+               Delay 2 sec
+            Endif
+         Endif
 
+         MakeDirectory movies\$movdir
+         item_phase @= move
+         # --- stage-safe move: wait while the stage is busy, retry 5 times ---
+         move_ok = 0
+         Loop 5
+            Loop 60
+               ReportStageBusy
+               If $reportedValue1 == 0
+                  Break
+               EndIf
+               Delay 1 sec
+            EndLoop
+            Try
+               MoveToNavItem $xtalct
+               move_ok = 1
+            Catch
+               Echo STAGE_RETRY | the stage refused: MoveToNavItem $xtalct
+               Echo STAGE_RETRY | waiting 20 s before trying again
+               Delay 20 sec
+            EndTry
+            If $move_ok == 1
+               Break
+            EndIf
+         EndLoop
+         If $move_ok == 0
+            Throw The stage stayed busy or not ready through 5 attempts: MoveToNavItem $xtalct
+         EndIf
 
-      OpenNewFile movies\$movdir\$yyyymmdd_$movnum_integrated_movie$mrc_ext
-      ReportCurrentFilename
-      Record
-      StartFrameWaitTimer -1
-      WaitForNextFrame
-      Save
-      echo STARTING TILT
-      BackgroundTilt $finalangle $rotincr
+         Loop $nsweeps
+            sweepcnt = $sweepcnt + 1
+            item_phase @= tilt
+            TiltTo $startangle
+            Delay 1 sec
+            ReportTiltAngle
+            GoToLowDoseArea R
+            UseContinuousFrames 1
 
-      Loop $nframes
-         
-         StartFrameWaitTimer -1
-         WaitForNextFrame
-         Save
-         
-      EndLoop
-      
-      StopContinuous
-      CloseFile
+            # --- THE CETA MOVIE: one MRC, written frame by frame ---------------
+            # Frame 1 is saved at the start angle, then the tilt starts and
+            # nframes more are saved while it runs.
+            item_phase @= acquire
+            item_file_open = 1
+            OpenNewFile movies\$movdir\$yyyymmdd_$movnum_integrated_movie$mrc_ext
+            ReportCurrentFilename
+            item_streaming = 1
+            Record
+            StartFrameWaitTimer -1
+            WaitForNextFrame
+            Save
+            echo STARTING TILT
+            BackgroundTilt $finalangle $rotincr
 
-      echo END TILT
-      echo Movie folder: $movdir
-      echo Acquired movie: $movname
-      Delay 120 sec
-      TiltTo 0
-      ReportClock
-      ReportStageXYZ
-      Delay 2 sec
+            Loop $nframes
+               StartFrameWaitTimer -1
+               WaitForNextFrame
+               Save
+            EndLoop
 
+            StopContinuous
+            item_streaming = 0
+            CloseFile
+            item_file_open = 0
 
+            echo END TILT
 
+            # --- VALVE CHECK, before the movie is named and flagged -----------
+            item_phase @= valve_check
+            If $valve_check == 1
+               ReportColumnOrGunValve
+               If $reportedValue1 != 1
+                  dfmv_valve_ok = 0
+               Endif
+            Endif
+            If $dfmv_valve_ok == 1
+               # The movie is NAMED only now, after the valve check has passed.
+               echo Movie folder: $movdir
+               echo Acquired movie: $movname
+               item_phase @= settle
+               Delay 120 sec
+               TiltTo 0
+               ReportClock
+               ReportStageXYZ
+               Delay 2 sec
 
+               # --- Mark this crystal done, for the resume check above --------
+               # Written BEFORE "Completed movie acquisition", so that phrase is
+               # only ever printed for a crystal that can no longer be set
+               # aside: an error after this point keeps the movie (state 2).
+               item_phase @= done_flag
+               OpenTextFile DFMVDONE O 0 $set_directory\movies\$movdir\dfmv_done.flag
+               WriteLineToFile DFMVDONE done
+               CloseTextFile DFMVDONE
+               ChangeItemNote $xtalct REYES_DONE_DFMV
+               If $item_state != 2
+                  item_state = 2
+                  n_collected = $n_collected + 1
+               Endif
+               Echo Completed movie acquisition
+               SaveLog
+            Endif
+         EndLoop
 
-      
-      Echo Completed movie acquisition
-      SaveLog
-   EndLoop
-   
-   SaveLog
+         If $dfmv_valve_ok == 0
+            item_valve = 1
+            item_state = 3
+         Else
+            Echo RESUME | stage=DFMV | item=$xtalct | action=collected | folder=$movdir
+         Endif
+      Endif
+   Catch
+      If $item_state != 2 AND $item_state != 1
+         item_state = 3
+      Endif
+   EndTry
+
+   # --- SET ASIDE: valve closed or an error -- this crystal only ----------------
+   # Every command that touches the scope or the disk has its own Try, so the
+   # clean-up of one crystal can never cost the next one.
+   If $item_state == 3
+      n_set_aside = $n_set_aside + 1
+      If $item_valve == 1
+         n_valve_lost = $n_valve_lost + 1
+         item_reason @= valve_closed
+         item_suffix @= -VALVECLOSED
+         Echo VALVE_CLOSED | stage=DFMV | item=$xtalct | folder=$movdir | action=not_marked_done
+         Echo WARNING: the column valve was closed when this movie finished.
+         Echo          Its frames are set aside; it will be collected again on a resume.
+      Else
+         item_reason @= error_$item_phase
+         item_suffix @= -SKIPPED
+         Echo WARNING: crystal $xtalct failed during $item_phase and is set aside.
+         Echo          Movie collection goes on; it will be collected again on a resume.
+      Endif
+      Echo ITEM_SKIPPED | stage=DFMV | item=$xtalct | reason=$item_reason
+      # A failure between Record and StopContinuous would leave the camera
+      # streaming, and one between OpenNewFile and CloseFile the movie open.
+      If $item_streaming == 1
+         Try
+            StopContinuous
+         Catch
+            Echo WARNING: StopContinuous failed after crystal $xtalct
+         EndTry
+      Endif
+      If $item_file_open == 1
+         Try
+            CloseFile
+         Catch
+            Echo WARNING: could not close the movie file of crystal $xtalct
+         EndTry
+      Endif
+      Try
+         TiltTo 0
+      Catch
+         Echo WARNING: could not tilt back to 0 after crystal $xtalct
+      EndTry
+      Try
+         RunInShell cmd /c ren "$set_directory\movies\$movdir" "$movdir$item_suffix"
+      Catch
+         Echo WARNING: could not rename the movie folder of crystal $xtalct
+      EndTry
+      Try
+         SetColumnOrGunValve 1
+         Delay 2 sec
+      Catch
+         Echo WARNING: could not re-open the column valve after crystal $xtalct
+      EndTry
+   Endif
+
+   If $item_state >= 2
+      Try
+         SaveNavigator
+         SaveLog
+      Catch
+         Echo WARNING: could not save the navigator or the log after crystal $xtalct
+      EndTry
+   Endif
 EndLoop
 
 Echo STOPPING
 
+# LET AUTOPROCESS FINISH DATA REDUCTION.
+
 Delay 900 sec
 ReportClock
+
+# set_aside is appended LAST, so field-keyed parsers of this record are unaffected.
+Echo DFMV_SUMMARY | targets=$nitems | collected=$n_collected | skipped=$n_skipped | set_aside=$n_set_aside
+Echo DFMV_CHECKS | valve_lost=$n_valve_lost
+dfmv_set_aside := $n_set_aside
+
+# THE END PHRASE IS ALWAYS PRINTED ONCE THE LOOP HAS RUN. A zero target count
+# is fatal further up, so it can only be reached after walking real crystals,
+# and every crystal is accounted for: collected now, earlier, or set aside.
+accounted = $n_collected + $n_skipped
+If $n_set_aside > 0
+   Echo $n_set_aside of $nitems crystal(s) set aside - $accounted have movies
+Endif
 
 Echo Completed acquiring tilt movies for all crystals!
 
@@ -2876,8 +3989,144 @@ SetColumnOrGunValve 0
 
 SaveNavigator
 SaveLog
-EndMacro
 
+# No crystal has a movie at all: the summary must not call the grid a success.
+# The phrase above has already released the monitor.
+If $accounted == 0
+   Exit DFMV collected nothing - all $nitems crystals were set aside
+Endif
+EndMacro
+Macro	34
+MacroName REyes_SpotGuard
+
+# =============================================================================
+# REyes_SpotGuard
+#
+# Shared Low Dose and spot-size check for the macros that collect diffraction:
+# called by REyes_STPSCN and REyes_DFMV.
+#
+# IT VERIFIES, IT NEVER SETS.
+#   Forcing SetSpotSize here could fight the Low Dose area setup, and the
+#   failure being guarded against is an unnoticed mismatch, not an unset value.
+#   No macro in this package changes the spot size.
+#
+# WHY IT READS AFTER GoToLowDoseArea R
+#   That call is the LM -> SA transition. If the spot size is not restored by
+#   the transition, diffraction is collected at the LM spot size: the dose
+#   changes several-fold, and the spot size appears only in the per-frame
+#   .mdoc, not in any processing log.
+#
+# WHY IT CHECKS LOW DOSE FIRST
+#   GoToLowDoseArea does nothing when Low Dose is off, so a spot size read
+#   after it would report whatever LM left behind while looking like a
+#   successful check. Low Dose off is therefore reported as its own failure.
+#   The area number from ReportLowDose is logged but not asserted on.
+#
+# EXPECTED SPOT IS PER STAGE
+#   Each caller declares its own expected value in stage_spot_expected, so a
+#   stage can deliberately run at a different spot size (e.g. a larger spot
+#   number for rotation movies to reduce dose).
+#
+# CALLER CONTRACT
+#   in   stage_name             short label for the log lines
+#   in   stage_spot_expected    expected spot for THIS stage; 0 or undefined
+#                               means "record it, do not judge it"
+#   in   spot_mismatch_policy   1 = abort, 2 = warn and continue.
+#                               Undefined defaults to 1 (abort).
+#   out  reyes_spot_ok          1 = proceed, 0 = caller must stop
+#   out  reyes_spot_actual      the spot size actually in force
+#   out  reyes_lowdose_ok       1 = Low Dose on, 0 = off (already fatal below)
+#
+# The caller checks $reyes_spot_ok and decides. This macro never calls Exit:
+# inside the pipeline's Try block an Exit is caught and reported as a generic
+# "Pipeline_execution_error", which loses the reason.
+# =============================================================================
+
+reyes_spot_ok := 1
+reyes_lowdose_ok := 1
+
+IsVariableDefined stage_name
+If $reportedValue1 == 0
+    stage_name @= unnamed-stage
+EndIf
+
+IsVariableDefined stage_spot_expected
+If $reportedValue1 == 0
+    stage_spot_expected := 0
+EndIf
+
+IsVariableDefined spot_mismatch_policy
+If $reportedValue1 == 0
+    spot_mismatch_policy := 1
+EndIf
+
+# The screen must be up or GoToLowDoseArea silently fails. Callers raise it
+# already; repeating it here is harmless and removes an ordering dependency.
+ScreenUp
+
+# --- Low Dose must be ON, or the area switch below is a no-op ---------------
+ReportLowDose
+lowdose_on = $reportedValue1
+lowdose_area = $reportedValue2
+
+If $lowdose_on == 0
+    Echo
+    Echo ############################################################
+    Echo # STOPPING: LOW DOSE IS OFF  (stage $stage_name)
+    Echo #
+    Echo # GoToLowDoseArea does nothing while Low Dose is off, so the
+    Echo # optics stay wherever the previous stage left them and the
+    Echo # spot check below would pass while reporting the LM value.
+    Echo # Turn Low Dose on and re-run this stage.
+    Echo ############################################################
+    Echo
+    reyes_lowdose_ok := 0
+    reyes_spot_ok := 0
+    Return
+EndIf
+
+GoToLowDoseArea R
+
+# --- Read the spot size AFTER the LM -> SA transition ----------------------
+ReportSpotSize
+reyes_spot_actual := $reportedValue1
+
+Echo SPOT_GUARD | stage=$stage_name | lowdose=$lowdose_on | area=$lowdose_area | spot_expected=$stage_spot_expected | spot_actual=$reyes_spot_actual
+
+If $stage_spot_expected == 0
+    Echo Spot size $reyes_spot_actual recorded for $stage_name (no expectation declared)
+    Return
+EndIf
+
+If $reyes_spot_actual == $stage_spot_expected
+    Echo Spot size verified for $stage_name: $reyes_spot_actual
+    Return
+EndIf
+
+Echo
+Echo ############################################################
+Echo # WARNING: SPOT SIZE MISMATCH  (stage $stage_name)
+Echo #   expected $stage_spot_expected  but the microscope reports $reyes_spot_actual
+Echo #
+Echo # Collecting at an unintended spot size changes the dose several-fold.
+Echo # It does not stop the run, but it breaks frame classification after
+Echo # the fact, and the value is recorded only in the per-frame .mdoc.
+Echo #
+Echo # If this IS intended, declare it as this stage's expected value
+Echo # rather than overriding the guard, so the log records the intent.
+Echo ############################################################
+Echo
+
+If $spot_mismatch_policy == 1
+    Echo ABORTING on spot size mismatch. To run anyway, choose "continue"
+    Echo for the spot-mismatch policy at setup.
+    reyes_spot_ok := 0
+    Return
+EndIf
+
+Echo Continuing at spot size $reyes_spot_actual despite the mismatch (policy = continue)
+
+EndMacro
 Macro	40
 MacroName REyes_postECNT
 
@@ -2902,7 +4151,6 @@ MergeNavFile $all_squares
 
 SaveLog
 EndMacro
-
 Macro	41
 MacroName REyes_premanualECNT
 
@@ -2923,7 +4171,6 @@ EndLoop
 
 SaveLog
 EndMacro
-
 Macro	42
 MacroName REyes_saveNAV
 
@@ -2931,19 +4178,50 @@ Echo $nav_file_name
 SaveNavigator $nav_file_name
 SaveLog
 EndMacro
-
 Macro	43
 MacroName ECNT_nav_ready
-Loop 20
-   DoesFileExist grid_squares\eucentricity.nav
-   nav_file_exists = $reportedValue1
 
-   If $nav_file_exists == 0
-      Delay 30 sec
-   ElseIf $nav_file_exists == 1
-      Delay 5 sec
+# EVERY POLL SURVIVES A TRANSIENT MICROSCOPE ERROR.
+# An asynchronous COM error from the microscope (for example "ERROR in call to
+# microscope getting small screen position") can surface inside a plain file
+# wait; without a Try of its own it reaches START_REYES's Catch and fails the
+# whole grid. Here each poll (the file test) and each Delay sits in its own
+# Try: an error is logged as
+#     WAIT_POLL_ERROR | wait=<name> | errors=<n so far>
+# and the wait simply goes on.
+# Nothing inside a Try may Break out of the poll loop: the Try only records
+# what it saw, and the loop decides after EndTry.
+# 20 polls of 30 s.
+
+nav_file_exists = 0
+poll_errors = 0
+poll_n = 0
+Loop 20
+   poll_n = $poll_n + 1
+   Try
+      DoesFileExist grid_squares\eucentricity.nav
+      nav_file_exists = $reportedValue1
+   Catch
+      poll_errors = $poll_errors + 1
+      Echo WAIT_POLL_ERROR | wait=ecnt_nav | errors=$poll_errors
+   EndTry
+
+   If $nav_file_exists == 1
+      Try
+         Delay 5 sec
+      Catch
+         poll_errors = $poll_errors + 1
+         Echo WAIT_POLL_ERROR | wait=ecnt_nav | errors=$poll_errors
+      EndTry
       Break
    EndIf
+
+   Try
+      Delay 30 sec
+   Catch
+      poll_errors = $poll_errors + 1
+      Echo WAIT_POLL_ERROR | wait=ecnt_nav | errors=$poll_errors
+   EndTry
 
 EndLoop
 
@@ -2951,19 +4229,51 @@ If $nav_file_exists == 0
    Exit REyes got stuck and Navigator file was not generated. Please, check REyes log.
 EndIf
 EndMacro
-
 Macro	44
 MacroName ECNT_corrected
-Loop 5
-   DoesFileExist grid_squares\eucentricity_correction.png
-   correction_file_exists = $reportedValue1
 
-   If $correction_file_exists == 0
-      Delay 30 sec
-   ElseIf $correction_file_exists == 1
-      Delay 15 sec
+# EVERY POLL SURVIVES A TRANSIENT MICROSCOPE ERROR.
+# An asynchronous COM error from the microscope (for example "ERROR in call to
+# microscope getting small screen position") can surface inside a plain file
+# wait; without a Try of its own it reaches START_REYES's Catch and fails the
+# whole grid. Here each poll (the file test) and each Delay sits in its own
+# Try: an error is logged as
+#     WAIT_POLL_ERROR | wait=<name> | errors=<n so far>
+# and the wait simply goes on.
+# Nothing inside a Try may Break out of the poll loop: the Try only records
+# what it saw, and the loop decides after EndTry.
+# 20 polls of 30 s. The wait ends the moment the file appears, so the
+# limit costs nothing on a normal run.
+
+correction_file_exists = 0
+poll_errors = 0
+poll_n = 0
+Loop 20
+   poll_n = $poll_n + 1
+   Try
+      DoesFileExist grid_squares\eucentricity_correction.png
+      correction_file_exists = $reportedValue1
+   Catch
+      poll_errors = $poll_errors + 1
+      Echo WAIT_POLL_ERROR | wait=ecnt_corrected | errors=$poll_errors
+   EndTry
+
+   If $correction_file_exists == 1
+      Try
+         Delay 15 sec
+      Catch
+         poll_errors = $poll_errors + 1
+         Echo WAIT_POLL_ERROR | wait=ecnt_corrected | errors=$poll_errors
+      EndTry
       Break
    EndIf
+
+   Try
+      Delay 30 sec
+   Catch
+      poll_errors = $poll_errors + 1
+      Echo WAIT_POLL_ERROR | wait=ecnt_corrected | errors=$poll_errors
+   EndTry
 
 EndLoop
 
@@ -2971,19 +4281,50 @@ If $correction_file_exists == 0
    Exit REyes got stuck and eucentricity was not corrected. Please, check REyes log.
 EndIf
 EndMacro
-
 Macro	45
 MacroName Targets_nav_ready
-Loop 50
-   DoesFileExist targets\targets.nav
-   nav_file_exists = $reportedValue1
 
-   If $nav_file_exists == 0
-      Delay 30 sec
-   ElseIf $nav_file_exists == 1
-      Delay 5 sec
+# EVERY POLL SURVIVES A TRANSIENT MICROSCOPE ERROR.
+# An asynchronous COM error from the microscope (for example "ERROR in call to
+# microscope getting small screen position") can surface inside a plain file
+# wait; without a Try of its own it reaches START_REYES's Catch and fails the
+# whole grid. Here each poll (the file test) and each Delay sits in its own
+# Try: an error is logged as
+#     WAIT_POLL_ERROR | wait=<name> | errors=<n so far>
+# and the wait simply goes on.
+# Nothing inside a Try may Break out of the poll loop: the Try only records
+# what it saw, and the loop decides after EndTry.
+# 50 polls of 30 s.
+
+nav_file_exists = 0
+poll_errors = 0
+poll_n = 0
+Loop 50
+   poll_n = $poll_n + 1
+   Try
+      DoesFileExist targets\targets.nav
+      nav_file_exists = $reportedValue1
+   Catch
+      poll_errors = $poll_errors + 1
+      Echo WAIT_POLL_ERROR | wait=targets_nav | errors=$poll_errors
+   EndTry
+
+   If $nav_file_exists == 1
+      Try
+         Delay 5 sec
+      Catch
+         poll_errors = $poll_errors + 1
+         Echo WAIT_POLL_ERROR | wait=targets_nav | errors=$poll_errors
+      EndTry
       Break
    EndIf
+
+   Try
+      Delay 30 sec
+   Catch
+      poll_errors = $poll_errors + 1
+      Echo WAIT_POLL_ERROR | wait=targets_nav | errors=$poll_errors
+   EndTry
 
 EndLoop
 
@@ -2996,19 +4337,50 @@ Else
    targets_found := 1
 EndIf
 EndMacro
-
 Macro	46
 MacroName Manual_ready
-Loop 20
-   DoesFileExist grid_squares\manual_grid_overlay.png
-   manual_file_exists = $reportedValue1
 
-   If $manual_file_exists == 0
-      Delay 30 sec
-   ElseIf $manual_file_exists == 1
-      Delay 5 sec
+# EVERY POLL SURVIVES A TRANSIENT MICROSCOPE ERROR.
+# An asynchronous COM error from the microscope (for example "ERROR in call to
+# microscope getting small screen position") can surface inside a plain file
+# wait; without a Try of its own it reaches START_REYES's Catch and fails the
+# whole grid. Here each poll (the file test) and each Delay sits in its own
+# Try: an error is logged as
+#     WAIT_POLL_ERROR | wait=<name> | errors=<n so far>
+# and the wait simply goes on.
+# Nothing inside a Try may Break out of the poll loop: the Try only records
+# what it saw, and the loop decides after EndTry.
+# 20 polls of 30 s.
+
+manual_file_exists = 0
+poll_errors = 0
+poll_n = 0
+Loop 20
+   poll_n = $poll_n + 1
+   Try
+      DoesFileExist grid_squares\manual_grid_overlay.png
+      manual_file_exists = $reportedValue1
+   Catch
+      poll_errors = $poll_errors + 1
+      Echo WAIT_POLL_ERROR | wait=manual_ready | errors=$poll_errors
+   EndTry
+
+   If $manual_file_exists == 1
+      Try
+         Delay 5 sec
+      Catch
+         poll_errors = $poll_errors + 1
+         Echo WAIT_POLL_ERROR | wait=manual_ready | errors=$poll_errors
+      EndTry
       Break
    EndIf
+
+   Try
+      Delay 30 sec
+   Catch
+      poll_errors = $poll_errors + 1
+      Echo WAIT_POLL_ERROR | wait=manual_ready | errors=$poll_errors
+   EndTry
 
 EndLoop
 

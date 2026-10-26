@@ -1,0 +1,313 @@
+04-Jan-25  00:38:48
+Column/gun valve state is 1
+Stage is NOT busy
+
+SCRIPT ERROR WITH THIS MESSAGE:
+Connection to microscope has been lost
+
+It can probably be restored if you restart FEI-SEMserver
+* * * * * * * * * * * * * * * * * *
+Stage 95.53 -204.97 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152021_0_movie.mrc
+Stage 70.53 -234.99 53.01
+Number of frames saved was 0
+STPSCN_FRAMES | square=16 | image=11816 | frames=unknown | exposure=0.25 | action=none
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152022_0_movie.mrc
+Stage 75.54 -234.99 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152023_0_movie.mrc
+Stage 80.54 -235.00 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152024_0_movie.mrc
+Stage 85.54 -235.00 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152025_0_movie.mrc
+Stage 90.54 -235.00 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152026_0_movie.mrc
+Stage 95.54 -235.00 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152027_0_movie.mrc
+Stage 100.54 -235.00 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152028_0_movie.mrc
+Stage 105.54 -235.00 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152029_0_movie.mrc
+Stage 110.54 -235.00 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152030_0_movie.mrc
+Stage 115.53 -235.01 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152031_0_movie.mrc
+Stage 120.54 -235.01 53.01
+12352.69 seconds elapsed time
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152032_0_movie.mrc
+Stage 70.54 -230.00 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152033_0_movie.mrc
+Stage 75.54 -230.00 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152034_0_movie.mrc
+Stage 80.55 -230.00 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152035_0_movie.mrc
+Stage 85.55 -230.00 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152036_0_movie.mrc
+Stage 90.55 -230.00 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152037_0_movie.mrc
+Stage 95.55 -230.00 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152038_0_movie.mrc
+Stage 100.55 -230.00 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152039_0_movie.mrc
+Stage 105.55 -230.00 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152040_0_movie.mrc
+Stage 110.55 -230.00 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152041_0_movie.mrc
+Stage 115.55 -230.00 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152042_0_movie.mrc
+Stage 120.55 -230.00 53.01
+12416.87 seconds elapsed time
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152043_0_movie.mrc
+Stage 70.55 -225.00 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152044_0_movie.mrc
+Stage 75.56 -224.99 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152045_0_movie.mrc
+Stage 80.56 -225.00 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152046_0_movie.mrc
+Stage 85.56 -224.99 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152047_0_movie.mrc
+Stage 90.56 -224.99 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152048_0_movie.mrc
+Stage 95.56 -224.99 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152049_0_movie.mrc
+Stage 100.56 -224.99 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152050_0_movie.mrc
+Stage 105.56 -224.99 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152051_0_movie.mrc
+Stage 110.56 -224.99 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152052_0_movie.mrc
+Stage 115.57 -224.99 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152053_0_movie.mrc
+Stage 120.56 -224.99 53.01
+12480.86 seconds elapsed time
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152054_0_movie.mrc
+Stage 70.56 -219.99 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152055_0_movie.mrc
+Stage 75.56 -219.98 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152056_0_movie.mrc
+Stage 80.57 -219.98 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152057_0_movie.mrc
+Stage 85.57 -219.98 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152058_0_movie.mrc
+Stage 90.57 -219.98 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152059_0_movie.mrc
+Stage 95.57 -219.98 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152060_0_movie.mrc
+Stage 100.57 -219.98 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152061_0_movie.mrc
+Stage 105.57 -219.98 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152062_0_movie.mrc
+Stage 110.57 -219.98 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152063_0_movie.mrc
+Stage 115.57 -219.98 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152064_0_movie.mrc
+Stage 120.57 -219.98 53.01
+12545.23 seconds elapsed time
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152065_0_movie.mrc
+Stage 70.57 -214.97 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152066_0_movie.mrc
+Stage 75.58 -214.97 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152067_0_movie.mrc
+Stage 80.58 -214.97 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152068_0_movie.mrc
+Stage 85.58 -214.97 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152069_0_movie.mrc
+Stage 90.58 -214.97 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152070_0_movie.mrc
+Stage 95.58 -214.97 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152071_0_movie.mrc
+Stage 100.58 -214.97 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152072_0_movie.mrc
+Stage 105.58 -214.97 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152073_0_movie.mrc
+Stage 110.58 -214.97 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152074_0_movie.mrc
+Stage 115.58 -214.97 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152075_0_movie.mrc
+Stage 120.58 -214.97 53.01
+12609.61 seconds elapsed time
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152076_0_movie.mrc
+Stage 70.58 -209.96 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152077_0_movie.mrc
+Stage 75.59 -209.96 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152078_0_movie.mrc
+Stage 80.59 -209.96 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152079_0_movie.mrc
+Stage 85.59 -209.95 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152080_0_movie.mrc
+Stage 90.59 -209.95 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152081_0_movie.mrc
+Stage 95.59 -209.95 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152082_0_movie.mrc
+Stage 100.59 -209.95 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152083_0_movie.mrc
+Stage 105.59 -209.95 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152084_0_movie.mrc
+Stage 110.59 -209.95 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152085_0_movie.mrc
+Stage 115.59 -209.95 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152086_0_movie.mrc
+Stage 120.59 -209.95 53.01
+12673.56 seconds elapsed time
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152087_0_movie.mrc
+Stage 70.59 -204.95 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152088_0_movie.mrc
+Stage 75.60 -204.95 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152089_0_movie.mrc
+Stage 80.60 -204.94 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152090_0_movie.mrc
+Stage 85.60 -204.95 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152091_0_movie.mrc
+Stage 90.60 -204.94 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152092_0_movie.mrc
+Stage 95.60 -204.94 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152093_0_movie.mrc
+Stage 100.60 -204.94 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152094_0_movie.mrc
+Stage 105.61 -204.94 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152095_0_movie.mrc
+Stage 110.60 -204.94 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152096_0_movie.mrc
+Stage 115.60 -204.94 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152097_0_movie.mrc
+Stage 120.60 -204.94 53.01
+12737.55 seconds elapsed time
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152098_0_movie.mrc
+Stage 70.61 -199.94 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152099_0_movie.mrc
+Stage 75.61 -199.94 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152100_0_movie.mrc
+Stage 80.61 -199.94 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152101_0_movie.mrc
+Stage 85.61 -199.94 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152102_0_movie.mrc
+Stage 90.61 -199.94 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152103_0_movie.mrc
+Stage 95.61 -199.94 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152104_0_movie.mrc
+Stage 100.61 -199.93 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152105_0_movie.mrc
+Stage 105.61 -199.93 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152106_0_movie.mrc
+Stage 110.61 -199.93 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152107_0_movie.mrc
+Stage 115.61 -199.93 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152108_0_movie.mrc
+Stage 120.61 -199.93 53.01
+12801.87 seconds elapsed time
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152109_0_movie.mrc
+Stage 70.61 -194.93 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152110_0_movie.mrc
+Stage 75.61 -194.93 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152111_0_movie.mrc
+Stage 80.62 -194.92 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152112_0_movie.mrc
+Stage 85.62 -194.92 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152113_0_movie.mrc
+Stage 90.62 -194.92 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152114_0_movie.mrc
+Stage 95.62 -194.92 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152115_0_movie.mrc
+Stage 100.62 -194.92 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152116_0_movie.mrc
+Stage 105.62 -194.92 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152117_0_movie.mrc
+Stage 110.62 -194.92 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152118_0_movie.mrc
+Stage 115.62 -194.92 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152119_0_movie.mrc
+Stage 120.62 -194.92 53.01
+12865.64 seconds elapsed time
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152120_0_movie.mrc
+Stage 70.62 -189.91 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152121_0_movie.mrc
+Stage 75.62 -189.91 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152122_0_movie.mrc
+Stage 80.62 -189.91 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152123_0_movie.mrc
+Stage 85.63 -189.91 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152124_0_movie.mrc
+Stage 90.63 -189.91 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152125_0_movie.mrc
+Stage 95.62 -189.91 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152126_0_movie.mrc
+Stage 100.62 -189.91 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152127_0_movie.mrc
+Stage 105.62 -189.90 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152128_0_movie.mrc
+Stage 110.62 -189.91 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152129_0_movie.mrc
+Stage 115.62 -189.91 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152130_0_movie.mrc
+Stage 120.62 -189.90 53.01
+12929.64 seconds elapsed time
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152131_0_movie.mrc
+Stage 70.62 -184.90 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152132_0_movie.mrc
+Stage 75.63 -184.90 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152133_0_movie.mrc
+Stage 80.63 -184.90 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152134_0_movie.mrc
+Stage 85.63 -184.90 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152135_0_movie.mrc
+Stage 90.63 -184.90 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152136_0_movie.mrc
+Stage 95.63 -184.90 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152137_0_movie.mrc
+Stage 100.63 -184.89 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152138_0_movie.mrc
+Stage 105.64 -184.89 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152139_0_movie.mrc
+Stage 110.64 -184.89 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152140_0_movie.mrc
+Stage 115.63 -184.89 53.01
+ 1 summed frames were saved to D:\DEOutput\Apollo\sample-I_16\20250104_152141_0_movie.mrc
+Stage 120.64 -184.89 53.01
+12993.52 seconds elapsed time
+Column/gun valve state is 1
+Shell command exited with status 0, error code 0
+Shell command exited with status 0, error code 0
+Not making directory D:\REyes\sample-I-reyes\sample-I_16 - it already exists
+Completed StepScan for current grid square
+STOPPING
+12995.37 seconds elapsed time
+STPSCN_SUMMARY | squares=16 | collected=16 | skipped=0
+STPSCN_CHECKS | multiframe_exposures=0 | final_exposure=0.25 | valve_lost=0
+Completed StepScan for all grid squares
+20250104  0050
+[5/7] All grid squares mapped
+[6/7] Processing Diffraction Map...
+File D:\REyes\sample-I-reyes\targets\targets.nav DOES NOT exist
+File D:\REyes\sample-I-reyes\targets\targets.nav DOES NOT exist
+File D:\REyes\sample-I-reyes\targets\targets.nav DOES NOT exist
+File D:\REyes\sample-I-reyes\targets\targets.nav DOES NOT exist
+File D:\REyes\sample-I-reyes\targets\targets.nav DOES NOT exist
+File D:\REyes\sample-I-reyes\targets\targets.nav DOES NOT exist
+File D:\REyes\sample-I-reyes\targets\targets.nav DOES NOT exist
+File D:\REyes\sample-I-reyes\targets\targets.nav DOES NOT exist
+
+SCRIPT ERROR WITH THIS MESSAGE:
+ERROR in call to microscope getting small screen position : 
+* * * * * * * * * * * * * * * * * *
+Jumping to "CATCH" error handler
+
+!!!!! ERROR DURING PIPELINE EXECUTION !!!!!
+Grid: sample-I-reyes (Slot 9)
+The pipeline encountered an error and stopped
+Check individual log files for details
+Navigator closed for this grid
+Grid processing complete: sample-I
+================================================
+
+Preparing for next grid...
+Brief pause to ensure system is ready...
+
+========================================
+========== PROCESSING SLOT 10 ==========
+========================================
+The strings are NOT equal
+Sample: sample-J-reyes
+Slot: 10
+20250104  0054
+Preparing grid: sample-J-reyes
+Slot: 10
+Opening new log file for: sample-J

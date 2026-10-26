@@ -6,28 +6,26 @@ A tool to process a montage of images and detect grid squares' centers.
 import sys
 import logging
 import argparse
-import dataclasses
 import numpy as np
 import pickle
 from pathlib import Path
 import hyperspy.api as hs
-import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')  # files only; never a GUI backend, even with X11 forwarding
 from shapely.ops import unary_union
-from typing import Any, Dict, List, Optional, Tuple
-from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+from typing import List, Optional, Tuple
 
-__version__ = '3.4.10'
+__version__ = '3.6.0'
 __min_required_version__ = '3.4.0'
 
 from pyREyes.lib.ui.REyes_ui import print_banner
-from pyREyes.lib.REyes_microscope_configurations import MicroscopeConfig, load_microscope_configs
+from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs
 from pyREyes.lib.REyes_logging import setup_logging, log_print
 from pyREyes.lib.REyes_errors import GridSquareError, CentroidDetectionError, FileNotFoundError
 from pyREyes.lib.image_processing.CartImage import CartImage
 from pyREyes.lib.image_processing.CartImage_utils import solve_scaling_magnitude
 from pyREyes.lib.image_processing.image_processor import ImageProcessor
 from pyREyes.lib.image_processing.PlottingManager import PlottingManager
-from pyREyes.lib.grid_processing.GridProcessor import GridProcessor
 from pyREyes.lib.grid_processing.CentroidProcessor import CentroidProcessor
 from pyREyes.lib.REyes_utils import find_mrc_and_mdoc_files
 
@@ -135,14 +133,14 @@ class GridSquareProcessor:
                             parts = line.strip().split()
                             x, y = float(parts[2]), float(parts[3])
                             coordinates.append((x, y))
-                        except (IndexError, ValueError) as e:
+                        except (IndexError, ValueError):
                             logging.warning(f"Skipping malformed stage position line: {line.strip()}")
                             continue
                             
                     elif line.startswith('StageZ =') and stage_z is None:
                         try:
                             stage_z = float(line.strip().split()[-1])
-                        except (IndexError, ValueError) as e:
+                        except (IndexError, ValueError):
                             logging.warning(f"Could not parse StageZ value: {line.strip()}")
                             continue
 

@@ -57,7 +57,7 @@ Test the installation by running:
 python -c "import pyREyes; print('pyREyes installation successful')"
 ```
 
-This step concludes installation of pyREyes. Note that AutoProcess (Python package `pyautoprocess`, https://github.com/theNelsonLab/autoprocess) is one of the dependencies and will be installed automatically. AutoSolve is not yet public and can be obtained from the developers via email.
+This step concludes installation of pyREyes. Note that AutoProcess (Python package `pyautoprocess`, https://github.com/theNelsonLab/autoprocess) is one of the dependencies and will be installed automatically (pyREyes 3.6.0 requires pyautoprocess 0.5.5 or later). AutoSolve is not yet public and can be obtained from the developers via email.
 
 ## Part 2: Acquisition PC
 
@@ -86,7 +86,7 @@ Two script packages are provided in `docs/scripts/` of the pyREyes repository:
 - `SerialEMsettings-scripts_ARCTICA_CETA_REyes.txt` for a Talos Arctica with a Ceta camera
 - `SerialEMsettings-scripts_ARCTICA_DE_Apollo_REyes.txt` for a Talos Arctica with a DE Apollo camera
 
-Both packages are set up for a Talos Arctica. On a Talos F200C with a DE Apollo camera, use the DE Apollo package, change the montage magnification in `REyes_MNT` from 115x to 155x LM (see [Configurable_SerialEM_params.md](Configurable_SerialEM_params.md), section 1), and start the monitor with `--microscope F200C-Apollo`.
+Both packages are set up for a Talos Arctica. On a Talos F200C with a DE Apollo camera, use the DE Apollo package, change the montage magnification in `REyes_MNT` (and the montage name used on resume in `Automated_Pipeline_Helper`) from 115x to 155x LM (see [Configurable_SerialEM_params.md](Configurable_SerialEM_params.md), section 1), and start the monitor with `--microscope F200C-Apollo`.
 
 Depending on the available camera, copy one of them to the acquisition PC and point `ScriptPackagePath` in SerialEMsettings.txt to it. The line to be changed is line 3 of the SerialEMsettings.txt file.
 
@@ -97,6 +97,8 @@ ScriptPackagePath      C:\ProgramData\SerialEM\Scripts\SerialEMsettings-scripts_
 ```
 
 Start a REyes session by running the `START_REYES` script, and batched collection on navigator points by running `BatchED_Main` (`BatchED_Main_CETA` in the Ceta package). The system-specific values to check in the scripts are listed in [Configurable_SerialEM_params.md](Configurable_SerialEM_params.md), and the differences between the two packages in `docs/scripts/README.md`.
+
+The DE Apollo and Ceta packages shipped with pyREyes 3.6.0 can resume an interrupted automated run from any stage (`START_REYES` asks whether the run is new) and set aside a grid square or crystal that fails instead of stopping the grid. They require pyREyes 3.6.0 or later on the processing PC. See `docs/scripts/README.md`.
 
 > **NOTE:** The User Guide PDF (`docs/tutorials/User_guide.pdf`) shows the SerialEM script workflow of REyes 3.4.0. In the current scripts the entry points are `START_REYES` and `BatchED_Main`; see `docs/scripts/README.md`.
 

@@ -5,13 +5,14 @@ import numpy as np
 from pyREyes.lib.REyes_errors import GridSquareError
 from pyREyes.lib.REyes_logging import log_print
 from pyREyes.lib.grid_processing.GridProcessor import GridProcessor
-from pyREyes.lib.image_processing.PlottingManager import PlottingManager
-from scipy.ndimage import rotate, label
+from scipy.ndimage import label
 from scipy.spatial.distance import cdist
+import matplotlib
+matplotlib.use('Agg')  # files only; never a GUI backend, even with X11 forwarding
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
-from typing import Tuple, List
-from shapely.geometry import Polygon, MultiPolygon, Point
+from typing import Tuple
+from shapely.geometry import Polygon, Point
 
 
 

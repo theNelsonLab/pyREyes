@@ -1,6 +1,6 @@
 # REyes Processing Monitor
 
-**Part of pyREyes v3.4.10** - Automated workflow orchestration and monitoring tool
+**Part of pyREyes v3.6.0** - Automated workflow orchestration and monitoring tool
 
 Provides automated execution and monitoring of the complete diffraction data processing pipeline using a state machine to track progress and automatically trigger each processing step.
 
@@ -14,6 +14,7 @@ Provides automated execution and monitoring of the complete diffraction data pro
 - **Integrated Movie Processing**: Optional AutoProcess support for acquired movies
 - **Structure Solution**: Optional AutoSolve integration for automatic structure determination
 - **Comprehensive Monitoring**: Log file tracking and error handling across all pipeline steps
+- **Keeps Going**: Grid squares SerialEM did not finish are set aside instead of stalling the session; SerialEM aborts are detected; the outcome is written to `session_status.json`
 
 ---
 
@@ -67,6 +68,8 @@ reyes-monitor --autoprocess --microscope-config Arctica-CETA-mrc-SM
 | `--stepscan-only` | flag | `False` | Skip movie collection and processing |
 | `--montage-only` | flag | `False` | Process only the initial montage and grid squares, then exit |
 | `--subprocess-timeout` | float | `1800` | Seconds before a processing subprocess is treated as hung and killed |
+| `--movie-timeout` | float | `--subprocess-timeout` (1800) | Seconds before the processing of one movie is abandoned; the movie is recorded as abandoned and the session moves on (see *Movie Processing Integration*) |
+| `--idle-timeout` | float | `0` (off) | Seconds with nothing new from the microscope, while waiting on SerialEM, before the monitor stops and records the session as `interrupted`; `0` waits indefinitely |
 | `--autosolve-timeout` | float | none | Seconds before AutoSolve is killed (no limit by default) |
 | `--autoprocess` | flag | `False` | Enable automatic movie processing (requires `--microscope-config`) |
 
@@ -109,19 +112,6 @@ reyes-monitor --autoprocess --microscope-config Arctica-CETA-mrc-SM
 | `--type` | `organic`, `inorganic` | none | Type of compound |
 | `--composition` | string | none | Chemical formula (overrides `--atoms`), e.g. `CaTiO3` |
 
-----------|------|---------|-------------|
-| `--microscope` | string | `Arctica-CETA` | Microscope configuration preset |
-| `--filtering` | string | `default` | Grid square filtering strategy |
-| `--manual-squares` | flag | `False` | Enable manual grid square selection |
-| `--starting-state` | string | `WAITING_FOR_MONTAGE` | Begin from specific state |
-| `--current-block` | int | `1` | Set current diffraction block number |
-| `--stepscan-only` | flag | `False` | Skip movie collection and processing |
-| `--montage-only` | flag | `False` | Process only the initial montage and grid squares, then exit |
-| `--subprocess-timeout` | float | `1800` | Seconds before a processing subprocess is treated as hung and killed |
-| `--autosolve-timeout` | float | none | Seconds before AutoSolve is killed (no limit by default) |
-| `--autoprocess` | flag | `False` | Enable automatic movie processing (requires `--microscope-config`) |
-| `--microscope-config` | string | none | pyautoprocess microscope preset for movie processing |
-| `--autosolve` | flag | `False` | Enable automatic structure solution |
 
 ---
 
@@ -129,6 +119,15 @@ reyes-monitor --autoprocess --microscope-config Arctica-CETA-mrc-SM
 
 ### Log Files
 - **`REyes_logs/REyes_monitor.log`** - Complete monitoring and processing log
+
+### Session Files
+- **`session_status.json`** (session folder) - How the session ended, written once when the monitor stops (since 3.6.0):
+  - `state`: `complete`, `failed` or `interrupted`
+  - `detail`: a short human-readable description (e.g. `montage only`, `step-scan only`)
+  - `reason` (only when there is one): `serialem_aborted`, `stepscan_failed`, `no_diffraction_map`, `target_generation_error`, `idle_timeout` or `sigterm`
+  - `utc`: time the status was written
+- **`targets/set_aside_items.json`** - Grid squares (stage `STPSCN`) and crystals (stage `DFMV`) that were set aside, one entry per item with the reason, the source (`serialem` or `pyreyes`), the log record and the log file (since 3.6.0)
+- **`beam_center.json`** - The beam centre the resolution rings were drawn about: `targets/beam_center.json` for the `write-targets-3` snapshots, and one in the snapshot folder of `append-targets-3-1` and of `create-final-targets-4` (`targets/targets_per_block_diff_snapshots/`); not written with `--beam-center frame`
 
 ### Processing Artifacts
 - All output files from individual pipeline steps
@@ -161,7 +160,11 @@ reyes-monitor --autoprocess --microscope-config Arctica-CETA-mrc-SM
 - Automatically renames and processes movies with AutoProcess
 - Tracks processed movies to avoid duplication
 - Writes `autoprocess_done.flag` in the movie folder after autoprocess succeeds; a restarted monitor skips movies with this flag (without `--autoprocess`, movies that were already renamed) and still counts them in the totals
-- Reports an autoprocess run that exits with a non-zero code as a failure, and marks a movie as done (`autoprocess_done.flag`) only after a successful run
+- Reports an autoprocess run that exits with a non-zero code as a failure, and marks a movie as done (`autoprocess_done.flag`) after a successful run, or with an "abandoned" note when it exceeds `--movie-timeout`
+- Movie logs that SerialEM opens when the movie stage is resumed (`<name>-1.log`, `<name>-2.log`, ...) are read after the original log, so the movies of a resumed stage are processed and the latest log decides when collection has ended
+- The processing of each movie is limited by `--movie-timeout` (default 1800 s, the same limit as `--subprocess-timeout` in 3.4.10). A movie that exceeds it is killed and recorded as abandoned in its `autoprocess_done.flag`, so it is not offered again, even after a restart, and the session continues with the next movie
+- A movie counts as processed only if autoprocess exits successfully and its output exists; an autoprocess run that exits 0 without producing output is a failure
+- Crystals that SerialEM set aside (`ITEM_SKIPPED`, or `VALVE_CLOSED` in the movie stage) are listed in `targets/set_aside_items.json`; nothing waits for them
 - Supports configurable AutoProcess parameters
 
 ### 4. Error Handling and Recovery
@@ -170,6 +173,26 @@ reyes-monitor --autoprocess --microscope-config Arctica-CETA-mrc-SM
 - Processing subprocesses that exceed `--subprocess-timeout` are killed together with their child processes and handled like a failed step
 - Graceful failure recovery with state preservation
 - Detailed progress tracking and completion detection
+- All plotting uses the non-interactive Agg backend, so the monitor and every stage it launches run without a display (e.g. over ssh)
+
+### 5. Set-Aside Grid Squares (StepScan blocks)
+A grid square that SerialEM did not finish no longer stalls the session (since 3.6.0). The current block is set aside, and the monitor goes on with the next block, when:
+- its log reports that SerialEM set it aside (`BLOCK_SKIPPED`, or `VALVE_CLOSED` in the StepScan); its frames were never copied, so there is nothing to map;
+- its log never reports completion and SerialEM has already opened a later block's log (checked on three consecutive polls);
+- it has no log at all and a later block's log exists (three polls).
+
+A grid square mapped again after a resume has a newer log beside the original (`<name>_<N>-1.log`, ...); the newest log is the block's log, and `dif-map-2` maps the block folder `<name>_<N>` with the stage positions from the newest log that names each frame. When the monitor is restarted with `--current-block`, blocks an earlier run already mapped (`dif_maps/dif_map_sums.csv`) count as mapped.
+
+Set-aside blocks are logged as `BLOCK SET ASIDE` and listed in `targets/set_aside_items.json`. When SerialEM ends the StepScan early (`StepScan incomplete`, or a `STPSCN_RESULT` record), targets are generated from the blocks that were mapped; if no block was mapped the session ends `failed` (`stepscan_failed`).
+
+### 6. SerialEM Abort Detection
+While waiting on SerialEM, the monitor reads the SerialEM logs for an abort of the current grid (`ERROR DURING PIPELINE EXECUTION`, `ERROR DURING MONTAGE ACQUISITION`, or a FAILED line for this grid in the multi-grid summary log). An abort is logged as `SERIALEM_ABORT` and the monitor stops instead of waiting: blocks that were already collected are still mapped and targets generated from them, and `session_status.json` records `failed` with reason `serialem_aborted`. An abort counts until SerialEM resumes the grid: once a newer log of the grid exists (e.g. `<name>-1.log` from a resume), the earlier abort is ignored. A monitor started after the fact therefore still ends with SerialEM's verdict; to follow a resume, restart the monitor after SerialEM has resumed the grid.
+
+### 7. Stopping
+- `--idle-timeout` (off by default): when set, a monitor that is waiting on SerialEM and sees nothing new arrive for that many seconds stops and records `interrupted` (`idle_timeout`). SerialEM aborts are detected from the logs, so this is only a backstop.
+- Stopping the monitor with SIGTERM (e.g. `kill`) records `interrupted` (`sigterm`) in `session_status.json`; the monitor then exits with status 143.
+
+These features work with both SerialEM script packages in `docs/scripts/`. The set-aside records (`BLOCK_SKIPPED`, `ITEM_SKIPPED`, `VALVE_CLOSED`, `STPSCN_RESULT`) are written by the DE Apollo and Ceta packages shipped with 3.6.0; with earlier packages the log-order rules above still apply.
 
 ---
 

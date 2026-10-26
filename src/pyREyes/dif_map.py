@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import hyperspy.api as hs
+import matplotlib
+matplotlib.use('Agg')  # files only; never a GUI backend, even with X11 forwarding
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
@@ -31,8 +33,12 @@ from skimage.measure import label, regionprops_table
 from pyREyes.lib.ui.REyes_ui import print_banner
 from pyREyes.lib.REyes_logging import setup_logging, log_print
 from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs, MicroscopeConfig
+# The MRC mode 0 signedness rule (see lib/mrc_io.py); IMOD_STAMP,
+# IMOD_FLAG_SIGNED_BYTES and mrc_mode0_signed stay importable here.
+from pyREyes.lib.mrc_io import (IMOD_FLAG_SIGNED_BYTES, IMOD_STAMP,  # noqa: F401
+                                mode0_signed as mrc_mode0_signed, mode0_view)
 
-__version__ = '3.4.10'
+__version__ = '3.6.0'
 __min_required_version__ = '3.4.0'
 
 # Configuration Constants
@@ -41,6 +47,10 @@ MICROSCOPE_CONFIGS = load_microscope_configs()
 # Detection parameters in the microscope configs are tuned for 2048x2048 frames.
 # Larger frames are binned down to this size before detection.
 TARGET_FRAME_SIZE = 2048
+
+# How far past a frame's file line its Stage line is looked for when it is not
+# at the configured offset (serialEM_log). The search stops at the next frame.
+STAGE_LINE_LOOKAHEAD = 12
 
 # Detection parameters for frames smaller than TARGET_FRAME_SIZE, keyed by frame
 # size. A frame uses the entry of the largest key not exceeding its size; frames
@@ -71,9 +81,15 @@ def _border_width(length: int) -> int:
 
 
 def _read_mrc(mrc_file: str) -> np.ndarray:
-    """Read MRC data with HyperSpy, falling back to mrcfile if HyperSpy fails."""
+    """
+    Read MRC data with HyperSpy, falling back to mrcfile if HyperSpy fails.
+
+    Mode 0 (8-bit) data are returned with the signedness the header gives
+    (see mrc_mode0_signed), whatever the reader chose, so a frame reads the same
+    on every machine.
+    """
     try:
-        return np.asarray(hs.load(mrc_file).data)
+        data = np.asarray(hs.load(mrc_file).data)
     except Exception as hs_error:
         try:
             import mrcfile
@@ -84,7 +100,8 @@ def _read_mrc(mrc_file: str) -> np.ndarray:
         with mrcfile.open(mrc_file, mode='r', permissive=True) as mrc:
             if mrc.data is None:
                 raise ValueError(f"No image data in {mrc_file}")
-            return np.array(mrc.data)
+            data = np.array(mrc.data)
+    return mode0_view(data, mrc_file)
 
 
 def _frame_axis(shape: Tuple[int, int, int]) -> int:
@@ -187,7 +204,8 @@ def bin_to_target(data: np.ndarray, target: int = TARGET_FRAME_SIZE) -> Tuple[np
     top = (data.shape[0] - height) // 2
     left = (data.shape[1] - width) // 2
     data = data[top:top + height, left:left + width]
-    binned = data.reshape(height // factor, factor, width // factor, factor).mean(axis=(1, 3))
+    binned = data.reshape(height // factor, factor, width // factor, factor).mean(
+        axis=(1, 3), dtype=np.float64)
     return binned.astype(data.dtype, copy=False), factor
 
 
@@ -196,8 +214,10 @@ def load_diffraction_frame(mrc_file: str) -> Tuple[np.ndarray, Dict[str, Any]]:
     Load an MRC file as one 2D frame ready for diffraction analysis.
 
     - Stacks of frames are summed
+    - MRC mode 0 bytes are read as the header says (unsigned counts unless the
+      IMOD signed-bytes flag is set), whatever the installed reader decides
     - int16 frames up to TARGET_FRAME_SIZE are returned unchanged; everything
-      else is converted to float32
+      else is converted to float32 (exact for 8- and 16-bit counts)
     - NaN and inf values are replaced with 0
     - Frames larger than TARGET_FRAME_SIZE have bad lines removed and are
       mean-binned by one integer factor
@@ -241,6 +261,37 @@ def load_diffraction_frame(mrc_file: str) -> Tuple[np.ndarray, Dict[str, Any]]:
         data, info['binning'] = bin_to_target(data)
 
     return data, info
+
+
+def block_logs(folder_name: str, directory: Optional[Path] = None) -> List[Path]:
+    """
+    The SerialEM logs of a block folder, newest first.
+
+    `<...><folder>.log`, and the logs SerialEM opens when the square is mapped
+    again after a resume (`<...><folder>-1.log`, `-2`, ...). The newest log
+    holds the positions of the frames written last.
+    """
+    directory = Path.cwd() if directory is None else Path(directory)
+    pattern = re.compile(rf"{re.escape(folder_name)}(?:-(\d+))?\.log$")
+    found = []
+    for path in directory.glob(f"*{folder_name}*.log"):
+        match = pattern.search(path.name)
+        if match and path.is_file():
+            found.append((int(match.group(1) or 0), path.name, path))
+    return [path for _, _, path in sorted(found, reverse=True)]
+
+
+def frame_sum(data: np.ndarray):
+    """
+    Total counts of a frame, the same on every machine.
+
+    Integer frames are summed exactly in int64 (an int, as before); float frames
+    are accumulated in float64 (a float). A float32 accumulator rounds with the
+    CPU's SIMD summation order.
+    """
+    if data.dtype.kind in 'iu':
+        return int(np.sum(data, dtype=np.int64))
+    return float(np.sum(data, dtype=np.float64))
 
 
 class ImageProcessor:
@@ -368,10 +419,14 @@ class ImageProcessor:
                         data: np.ndarray, 
                         ft_done: bool = False) -> np.ndarray:
         """Generates a binary image using Gaussian blurs and thresholding."""
-        # Convert unsigned integers to float64 so that subtracting the Gaussian
-        # filtered images cannot overflow
-        if data.dtype in [np.uint8, np.uint16, np.uint32]:
-            data = data.astype(np.float64)
+        # Everything in float64: integer frames would overflow when the blurred
+        # images are subtracted, and float32 filtering, mean and std round
+        # differently with the CPU's SIMD width, which moved the threshold and
+        # changed spot counts between machines on identical frames.
+        # legacy_parse keeps the REyes 3.4.10 and earlier arithmetic (only
+        # unsigned integers were converted).
+        if not self.legacy_parse or data.dtype in [np.uint8, np.uint16, np.uint32]:
+            data = np.asarray(data, dtype=np.float64)
         
         if ft_done:
             # Use original hardcoded values for FT processing
@@ -494,7 +549,7 @@ class DiffractionAnalyzer:
         try:
             # Load and process the MRC file
             data = self.image_processor.parse_mrc(file_path)
-            total_sum = np.sum(data)
+            total_sum = frame_sum(data)
             
             # Create primary binary image and detect diffraction spots
             primary_binary_image = self.image_processor.create_binary_image(
@@ -1051,7 +1106,25 @@ class FileHandler:
                         stage_match = pattern_stage.search(lines[i + skip_lines])
                         if stage_match:
                             return [float(stage_match.group(j)) for j in range(1, 4)]
-            
+
+            # The Stage line was not at its fixed offset. A macro that logs
+            # anything between Record and ReportStageXYZ moves it, and the frame
+            # then lost its position without a word, so it could never become a
+            # target. Look on for it, but never past the next frame's file line:
+            # a position taken from there would be another frame's.
+            pattern_other_file = re.compile(r"\.mrc\b")
+            for i, line in enumerate(lines):
+                if pattern_file.search(line):
+                    for k in range(i + 1, min(i + 1 + STAGE_LINE_LOOKAHEAD, len(lines))):
+                        if pattern_other_file.search(lines[k]) and not pattern_file.search(lines[k]):
+                            break
+                        stage_match = pattern_stage.search(lines[k])
+                        if stage_match:
+                            log_print(f"Stage position for {filename} found {k - i} line(s) after its "
+                                      f"file line instead of {self.config.serialEM_log}: the log has "
+                                      f"extra lines between Record and ReportStageXYZ", logging.WARNING)
+                            return [float(stage_match.group(j)) for j in range(1, 4)]
+
             log_print(f"No coordinates found for {filename}", logging.WARNING)
             return None
 
@@ -1390,10 +1463,9 @@ def main() -> int:
             ft_peaks = []
             quality_labels = []
 
-            # Find SerialEM log file
-            log_file = next(Path.cwd().glob(f"*{folder_name}.log"), None)
-            log_file_path = str(log_file) if log_file else None
-            if not log_file:
+            # Find SerialEM log file(s): the block's log, newest resume log first
+            log_files = block_logs(folder_name)
+            if not log_files:
                 log_print(f"No SerialEM log file found for {folder_name}. Proceeding without coordinates.", logging.WARNING)
 
             # Process each file of the block in acquisition order
@@ -1413,11 +1485,15 @@ def main() -> int:
                 ft_peaks.append(result.n_pattern_spots)
                 quality_labels.append(result.quality)
 
-                # Get coordinates if log file exists
-                coords = (
-                    file_handler.get_coordinates_for_file(log_file_path, filename)
-                    if log_file_path else [None, None, None]
-                )
+                # Get coordinates if log file exists: from the newest log
+                # that names the frame
+                coords = None
+                for block_log in log_files:
+                    coords = file_handler.get_coordinates_for_file(str(block_log), filename)
+                    if coords is not None:
+                        break
+                if not log_files:
+                    coords = [None, None, None]
 
                 # Add to CSV data
                 csv_data.append([

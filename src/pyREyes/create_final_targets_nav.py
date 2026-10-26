@@ -16,13 +16,14 @@ import pandas as pd
 
 from pyREyes.lib.ui.REyes_ui import print_banner
 from pyREyes.lib.REyes_logging import setup_logging, log_print
-from pyREyes.lib.diffraction.DiffractionDataProcessor import DiffractionDataProcessor, DiffractionProcessingError
+from pyREyes.lib.diffraction import beam_center_search
+from pyREyes.lib.diffraction.DiffractionDataProcessor import DiffractionDataProcessor
 from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs
 
 # Configuration Constants
 MICROSCOPE_CONFIGS = load_microscope_configs()
 
-__version__ = '3.4.10'
+__version__ = '3.6.0'
 __min_required_version__ = '3.4.0'
 
 class NavFileError(Exception):
@@ -121,7 +122,7 @@ def select_top_items(
     
     # Log summary information
     log_print(f"Selected {len(selected_items)} items, skipped {skipped_count} items")
-    log_print(f"\nDetailed selection summary:", logging.DEBUG)
+    log_print("\nDetailed selection summary:", logging.DEBUG)
     log_print(f"Total items processed: {len(selected_items) + skipped_count}", logging.DEBUG)
     log_print(f"Items selected: {len(selected_items)}", logging.DEBUG)
     log_print(f"Items skipped: {skipped_count}", logging.DEBUG)
@@ -155,6 +156,13 @@ def block_based_target_selection(
 
     Path(snapshot_output_dir).mkdir(parents=True, exist_ok=True)
 
+    # One beam centre for every snapshot, from the best-ranked frames: which
+    # frames get plotted is only known once the selection below has run
+    processor_instance.find_beam_center(
+        df["Path"].astype(str).head(beam_center_search.MAX_FRAMES),
+        snapshot_output_dir
+    )
+
     all_entries = []
     existing_coords: List[Tuple[float, float]] = []
     total_selected = 0
@@ -180,7 +188,11 @@ def block_based_target_selection(
                 if quality_only else sorted_block
             )
 
-            for idx, row in candidate_rows.sort_values(by=sort_by, ascending=False).iterrows():
+            # Stable: equal values keep the block ranking above. The default
+            # quicksort is CPU-dispatched in numpy 2 and orders ties differently
+            # on different machines.
+            for idx, row in candidate_rows.sort_values(by=sort_by, ascending=False,
+                                                       kind="stable").iterrows():
                 coord = eval(row["Coordinates"])
                 coord_xy = (coord[0], coord[1])
                 if idx in used_indices or any(euclidean_distance(coord_xy, ec) < tolerance for ec in existing_coords):
@@ -256,7 +268,7 @@ def block_based_target_selection(
         else:
             all_selected_df = pd.concat([all_selected_df, combined], ignore_index=True)
 
-    log_print(f"\nFinal summary:")
+    log_print("\nFinal summary:")
     log_print(f"Total selected entries: {total_selected}")
     log_print(f"Total skipped entries due to duplication or proximity: {total_skipped}")
 
@@ -446,6 +458,12 @@ def create_parser() -> argparse.ArgumentParser:
         default=['sum', 'peaks', 'dqi'],
         help='Which target lists to use for block-based selection (default: all three). Can specify 1-3 values. Applies only with --top-target-per-block; category-based selection uses --input-files.'
     )
+    parser.add_argument(
+        '--beam-center',
+        type=beam_center_search.parse_mode,
+        default=beam_center_search.MODE_AUTO,
+        help=beam_center_search.ARGUMENT_HELP
+    )
     return parser
 
 def main() -> Optional[int]:
@@ -475,7 +493,7 @@ def main() -> Optional[int]:
         if args.top_target_per_block is not None:
             log_print(f"Running block-based target selection (top {args.top_target_per_block} per block)")
             log_print(f"Using target lists: {', '.join(args.target_lists)}")
-            processor = DiffractionDataProcessor(args.microscope)
+            processor = DiffractionDataProcessor(args.microscope, beam_center=args.beam_center)
             block_based_target_selection(
                 input_csv_path="dif_maps/dif_map_sums.csv",
                 output_file=str(Path('targets') / args.output),

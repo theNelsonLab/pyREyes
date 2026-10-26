@@ -1,5 +1,5 @@
-# Diffraction Map Processing Pipeline (REyes v3.4.10)
-[![License](https://img.shields.io/badge/License-Academic_Use_Only-blue.svg)](LICENSE)
+# Diffraction Map Processing Pipeline (REyes v3.6.0)
+[![License](https://img.shields.io/badge/License-Academic_Use_Only-blue.svg)](https://github.com/theNelsonLab/pyREyes/blob/main/LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.16971798.svg)](https://doi.org/10.5281/zenodo.16971798)
 
 ## Quick Start
@@ -17,7 +17,9 @@ reyes-monitor --microscope Arctica-CETA --autoprocess --microscope-config Arctic
 ## Overview
 pyREyes is a Python package to support REyes (Reciprocal Eyes), an end-to-end autonomous electron diffraction data collection and processing pipeline. REyes generates diffraction heatmaps, identifies key targets, and manages navigator files for SerialEM.
 
-📚 [Full Documentation](src/pyREyes/docs/README_FULL.md)
+📚 [Full Documentation](https://github.com/theNelsonLab/pyREyes/blob/main/src/pyREyes/docs/README_FULL.md)
+
+📝 [Changelog](https://github.com/theNelsonLab/pyREyes/blob/main/CHANGELOG.md) - what is new in 3.6.0 and how to upgrade from 3.4.x
 
 ## Key Features
 - Grid squares detection and atlas management
@@ -31,6 +33,8 @@ pyREyes is a Python package to support REyes (Reciprocal Eyes), an end-to-end au
 - Automated data processing with state machine monitoring
 - Optional movie processing and structure solution integration
 - Restart-safe movie processing and timeouts for hung processing steps
+- Keeps going when SerialEM sets a grid square or crystal aside or aborts a grid, and records the session outcome in `session_status.json`
+- SerialEM script packages for Ceta and DE Apollo cameras ([docs/scripts](https://github.com/theNelsonLab/pyREyes/tree/main/docs/scripts))
 
 ## Diffraction Quality Analysis
 
@@ -43,17 +47,17 @@ REyes uses advanced quality metrics to assess diffraction patterns:
 ## Pipeline Components
 
 ### Core Modules
-1. [Grid Squares Searcher](src/pyREyes/docs/modules/grid-squares.md)
-   - 1.1. [Manual Grid Squares Adder](src/pyREyes/docs/modules/manual-squares.md)
-2. [Navigator Eucentricity Corrector](src/pyREyes/docs/modules/eucentricity.md)
-3. [Diffraction Map Processor](src/pyREyes/docs/modules/diffraction-map.md)
-4. [Navigation File Generator](src/pyREyes/docs/modules/navigation.md)
-   - 4.1. [Selected Targets Adder](src/pyREyes/docs/modules/targets.md)
-5. [Final Targets Processor](src/pyREyes/docs/modules/final-targets.md)
-6. [Collection Executor](src/pyREyes/docs/modules/map-plotter.md)
+1. [Grid Squares Searcher](https://github.com/theNelsonLab/pyREyes/blob/main/src/pyREyes/docs/modules/grid-squares.md)
+   - 1.1. [Manual Grid Squares Adder](https://github.com/theNelsonLab/pyREyes/blob/main/src/pyREyes/docs/modules/manual-squares.md)
+2. [Navigator Eucentricity Corrector](https://github.com/theNelsonLab/pyREyes/blob/main/src/pyREyes/docs/modules/eucentricity.md)
+3. [Diffraction Map Processor](https://github.com/theNelsonLab/pyREyes/blob/main/src/pyREyes/docs/modules/diffraction-map.md)
+4. [Navigation File Generator](https://github.com/theNelsonLab/pyREyes/blob/main/src/pyREyes/docs/modules/navigation.md)
+   - 4.1. [Selected Targets Adder](https://github.com/theNelsonLab/pyREyes/blob/main/src/pyREyes/docs/modules/targets.md)
+5. [Final Targets Processor](https://github.com/theNelsonLab/pyREyes/blob/main/src/pyREyes/docs/modules/final-targets.md)
+6. [Collection Executor](https://github.com/theNelsonLab/pyREyes/blob/main/src/pyREyes/docs/modules/map-plotter.md)
 
 **Pipeline Orchestration:**
-- [Processing Monitor](src/pyREyes/docs/modules/monitor.md) - Automatically runs all steps above and pauses for user input on optional manual steps
+- [Processing Monitor](https://github.com/theNelsonLab/pyREyes/blob/main/src/pyREyes/docs/modules/monitor.md) - Automatically runs all steps above and pauses for user input on optional manual steps
 
 ## Directory Structure
 ```

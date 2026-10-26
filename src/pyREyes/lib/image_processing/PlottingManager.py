@@ -1,12 +1,14 @@
 from pathlib import Path
 import hyperspy.api as hs
-from typing import Any, Dict, List, Optional, Tuple
-from pyREyes.lib.REyes_microscope_configurations import MicroscopeConfig, load_microscope_configs
+from typing import List, Tuple
+from pyREyes.lib.REyes_microscope_configurations import MicroscopeConfig
 import numpy as np
-from pyREyes.lib.REyes_errors import GridSquareError, CentroidDetectionError, FileNotFoundError
+from pyREyes.lib.REyes_errors import GridSquareError
+import matplotlib
+matplotlib.use('Agg')  # files only; never a GUI backend, even with X11 forwarding
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
-from scipy.ndimage import rotate, label
+from scipy.ndimage import rotate
 
 
 class PlottingManager:

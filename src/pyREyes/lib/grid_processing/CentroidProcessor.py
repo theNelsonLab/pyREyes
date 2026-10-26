@@ -1,9 +1,9 @@
 import numpy as np
 from typing import List, Tuple, Dict
 import re
-import os
+import matplotlib
+matplotlib.use('Agg')  # files only; never a GUI backend, even with X11 forwarding
 import matplotlib.pyplot as plt
-from pyREyes.lib.REyes_logging import log_print
 from scipy.stats import gaussian_kde
 from scipy.signal import find_peaks
 

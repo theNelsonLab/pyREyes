@@ -6,22 +6,21 @@ A tool for processing diffraction data and generating navigation files with qual
 import logging
 import os
 import sys
-from typing import List, Optional, Tuple
 import argparse
 import glob
 from pathlib import Path
 
-import hyperspy.api as hs
-import matplotlib.pyplot as plt
-import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # files only; never a GUI backend, even with X11 forwarding
 import pandas as pd
 
 from pyREyes.lib.ui.REyes_ui import print_banner
 from pyREyes.lib.REyes_logging import setup_logging, log_print
 from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs
-from pyREyes.lib.diffraction.DiffractionDataProcessor import DiffractionDataProcessor, DiffractionProcessingError
+from pyREyes.lib.diffraction import beam_center_search
+from pyREyes.lib.diffraction.DiffractionDataProcessor import DiffractionDataProcessor
 
-__version__ = '3.4.10'
+__version__ = '3.6.0'
 __min_required_version__ = '3.4.0'
 
 MICROSCOPE_CONFIGS = load_microscope_configs()
@@ -48,6 +47,12 @@ def create_parser() -> argparse.ArgumentParser:
         type=float,
         help='Override pixel size in mm/pixel for 2k images (default: based on microscope choice)'
     )
+    parser.add_argument(
+        '--beam-center',
+        type=beam_center_search.parse_mode,
+        default=beam_center_search.MODE_AUTO,
+        help=beam_center_search.ARGUMENT_HELP
+    )
     return parser
 
 def main() -> int:
@@ -71,7 +76,8 @@ def main() -> int:
         processor = DiffractionDataProcessor(
             args.microscope,
             camera_length=args.camera_length,
-            pixel_size=args.pixel_size
+            pixel_size=args.pixel_size,
+            beam_center=args.beam_center
         )
 
         csv_files = glob.glob('targets/targets*.csv')
@@ -82,6 +88,16 @@ def main() -> int:
         # Define output folder
         target_folder = Path("targets")
         target_folder.mkdir(parents=True, exist_ok=True)
+
+        # One beam centre for every snapshot of the session, found from all
+        # the frames that are about to be plotted rather than list by list
+        snapshot_paths = []
+        for csv_file in csv_files:
+            try:
+                snapshot_paths.extend(pd.read_csv(csv_file, usecols=['Path'])['Path'].astype(str))
+            except Exception as e:
+                log_print(f"Beam centre: no frame paths in {csv_file}: {str(e)}", logging.WARNING)
+        processor.find_beam_center(snapshot_paths, str(target_folder))
 
 
         for csv_file in csv_files:

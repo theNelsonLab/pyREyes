@@ -8,13 +8,13 @@ import os
 import re
 import sys
 from dataclasses import dataclass
-from pathlib import Path
 from typing import List, Optional, Tuple
 
+import matplotlib
+matplotlib.use('Agg')  # files only; never a GUI backend, even with X11 forwarding
 import matplotlib.pyplot as plt
 import numpy as np
-from mpl_toolkits.mplot3d import Axes3D
-from numpy.typing import NDArray
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 (registers the 3d projection)
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
@@ -22,7 +22,7 @@ from pyREyes.lib.ui.REyes_ui import print_banner
 from pyREyes.lib.REyes_logging import setup_logging, log_print
 from pyREyes.lib.REyes_errors import ProcessingError
 
-__version__ = '3.4.10'
+__version__ = '3.6.0'
 __min_required_version__ = '3.4.0'
 
 @dataclass

@@ -6,21 +6,22 @@ A tool to append targets list with custom items, e.g. from nXDS.
 import logging
 import os
 import sys
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Optional, Tuple
 import argparse
 import glob
 
-import hyperspy.api as hs
+import matplotlib
+matplotlib.use('Agg')  # files only; never a GUI backend, even with X11 forwarding
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 from pyREyes.lib.ui.REyes_ui import print_banner
 from pyREyes.lib.REyes_logging import setup_logging, log_print
+from pyREyes.lib.diffraction import beam_center_search
 from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs, MicroscopeConfig
 
-__version__ = '3.4.10'
+__version__ = '3.6.0'
 __min_required_version__ = '3.4.0'
 
 MICROSCOPE_CONFIGS = load_microscope_configs()
@@ -132,9 +133,14 @@ def plot_diffraction_pattern(
     config: MicroscopeConfig,
     spots: int,
     sum_value: int,
-    filename: str
+    filename: str,
+    beam_centre: Optional[beam_center_search.BeamCentre] = None
 ) -> plt.Figure:
-    """Create a diffraction pattern plot with resolution rings."""
+    """Create a diffraction pattern plot with resolution rings.
+
+    The rings are drawn about `beam_centre`, or about the middle of the frame
+    when none is given.
+    """
     # Adjust pixel size based on image dimensions
     pixel_size = config.pixel_size
     if frame.shape[0] == 4096:
@@ -144,8 +150,10 @@ def plot_diffraction_pattern(
     elif frame.shape[0] == 1024:
         pixel_size *= 2
         
-    center = (frame.shape[0] / 2, frame.shape[1] / 2)
-    max_radius = min(center[0], center[1])
+    if beam_centre is None:
+        beam_centre = beam_center_search.frame_centre(frame.shape)
+    center = (beam_centre.x, beam_centre.y)
+    max_radius = beam_centre.max_ring_radius()
     
     fig, ax = plt.subplots(figsize=(8, 8))
     vmin, vmax = np.percentile(frame, (1, 99))
@@ -177,6 +185,7 @@ def plot_diffraction_pattern(
             fontsize=10
         )
     
+    beam_center_search.annotate(ax, beam_centre)
     ax.set_title(f"{filename} | Spots: {spots} | Sum: {sum_value}")
     ax.axis('off')
     return fig
@@ -185,24 +194,44 @@ def save_diffraction_snapshots(
     df: pd.DataFrame,
     output_folder: str,
     start_index: int,
-    microscope_config: MicroscopeConfig
+    microscope_config: MicroscopeConfig,
+    beam_center: beam_center_search.Mode = beam_center_search.MODE_AUTO
 ) -> None:
     """Save diffraction pattern snapshots for each entry."""
+    # The loader the diffraction map scored the frames with, so a multi-frame
+    # MRC is summed here exactly as it was there
+    from pyREyes.dif_map import load_diffraction_frame
+
     os.makedirs(output_folder, exist_ok=True)
     log_print(f"\nGenerating diffraction snapshots in {output_folder}")
-    
+
+    # One beam centre for every snapshot, from the frames about to be plotted
+    detected = {}
+    if beam_center == beam_center_search.MODE_AUTO:
+        frames = []
+        for path in beam_center_search.sample(list(dict.fromkeys(df['Path'].astype(str)))):
+            try:
+                frames.append(load_diffraction_frame(path)[0])
+            except Exception as e:
+                log_print(f"Beam centre: could not read {path}: {str(e)}", logging.WARNING)
+        detected = beam_center_search.find_beam_centres(frames)
+    used = {}
+
     for idx, row in enumerate(df.itertuples(), start=start_index):
         try:
-            signal = hs.load(row.Path)
+            frame, _ = load_diffraction_frame(row.Path)
             spots = int(row.FilteredPeaks)
             sum_value = int(row.Sum)
+            beam_centre = beam_center_search.resolve(beam_center, frame.shape, detected)
+            used[beam_centre.shape] = beam_centre
             
             fig = plot_diffraction_pattern(
-                signal.data,
+                frame,
                 microscope_config,
                 spots,
                 sum_value,
-                os.path.basename(row.Path)
+                os.path.basename(row.Path),
+                beam_centre
             )
             
             output_filename = f"{idx}_{os.path.splitext(os.path.basename(row.Path))[0]}_sum{sum_value}.png"
@@ -214,6 +243,9 @@ def save_diffraction_snapshots(
             
         except Exception as e:
             log_print(f"Error processing {row.Path}: {str(e)}", logging.ERROR)
+
+    if beam_center != beam_center_search.MODE_FRAME:
+        beam_center_search.write_sidecar(output_folder, beam_center, used.values())
 
 def prompt_for_nav_file(create_nxds_nav: Optional[str] = None) -> Tuple[str, str, int]:
     """
@@ -278,6 +310,12 @@ def create_parser() -> argparse.ArgumentParser:
         choices=['yes', 'no'],
         help='Create new targets_nxds.nav file (yes) or append to existing targets.nav (no)'
     )
+    parser.add_argument(
+        '--beam-center',
+        type=beam_center_search.parse_mode,
+        default=beam_center_search.MODE_AUTO,
+        help=beam_center_search.ARGUMENT_HELP
+    )
     
     return parser
 
@@ -329,7 +367,8 @@ def main() -> int:
             df,
             output_folder,
             start_index,
-            microscope_config
+            microscope_config,
+            args.beam_center
         )
         
         log_print("\nProcessing completed successfully!\n")

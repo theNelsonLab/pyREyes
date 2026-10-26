@@ -78,7 +78,7 @@ def test_duplicate_index_skips_the_block(handler, tmp_path):
 
 
 def test_unpadded_and_outgrown_indices(handler, tmp_path):
-    files = [f"20260728_{i}_0_movie.mrc" for i in range(99995, 100004)]
+    files = [f"20250101_{i}_0_movie.mrc" for i in range(99995, 100004)]
     folder = make_block(tmp_path / 'b_2', files)
 
     indices = handler.determine_indices(folder)

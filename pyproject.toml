@@ -4,21 +4,28 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyREyes"
-version = "3.4.10"
+version = "3.6.0"
 authors = [
     { name = "Dmitry Eremin", email = "eremin@caltech.edu" },
     { name = "Hongyu Zhang", email = "hzhang7@caltech.edu" }
 ]
 description = "Automated MicroED diffraction data collection and analysis package"
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Operating System :: OS Independent",
+    "License :: Other/Proprietary License",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-    "pyautoprocess>=0.5.1,<0.6",
+    "pyautoprocess>=0.5.5,<0.6",
     "numpy==2.2.6",
     "numba==0.61.2",
     "pandas==2.2.3",
