@@ -17,6 +17,7 @@ sidecar; `frame` mode draws what 3.4.10 and earlier drew.
 """
 
 import json
+from pathlib import Path
 import os
 
 import matplotlib
@@ -341,3 +342,129 @@ def test_append_targets_rings_follow_the_centre():
     fig = sta.plot_diffraction_pattern(frame, config, 10, 100, 'f.mrc', centre)
     assert ring_centres(fig.axes[0]) == {(153.4, 127.2)}
     plt.close(fig)
+
+
+# --------------------------------------------------------------------------- #
+# A sibling session's centre, when this session's frames do not settle it
+# --------------------------------------------------------------------------- #
+def sidecar_at(root, rel, centres):
+    path = Path(root) / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({'centres': centres}))
+
+
+def detected(x, y, shape, trusted=True, source='detected'):
+    return {'x': x, 'y': y, 'shape': list(shape), 'source': source,
+            'trusted': trusted}
+
+
+def test_the_default_sidecar_location_is_the_targets_folder():
+    assert bcs.SIDECAR_LOCATIONS == ('targets/beam_center.json',)
+
+
+def test_an_untrusted_search_keeps_what_was_measured():
+    centres = bcs.find_beam_centres([pattern()])          # one frame: untrusted
+    centre = centres[(256, 320)]
+    assert centre.source == bcs.SOURCE_FRAME
+    assert centre.n_frames == 1 and centre.n_ok == 1
+    assert centre.rejected['x'] == pytest.approx(153.4, abs=1.0)
+
+
+def test_a_sibling_session_supplies_the_session_centre(tmp_path):
+    parent = tmp_path / 'session'
+    me = parent / 'grid-one'
+    me.mkdir(parents=True)
+    sidecar_at(parent / 'grid-two', bcs.SIDECAR_LOCATIONS[0],
+               [detected(461.0, 513.5, (1024, 1024))])
+    sidecar_at(parent / 'grid-three', bcs.SIDECAR_LOCATIONS[0],
+               [detected(463.0, 511.5, (1024, 1024))])
+    centre = bcs.sibling_centre(me, (1024, 1024))
+    assert centre.source == bcs.SOURCE_SESSION and centre.measured and centre.trusted
+    assert (centre.x, centre.y) == (462.0, 512.5)
+    assert centre.borrowed_from == ['grid-three', 'grid-two']
+    assert 'borrowed from sibling session(s)' in centre.describe()
+
+
+def test_a_sibling_centre_is_never_rescaled_chained_or_untrusted(tmp_path):
+    parent = tmp_path / 'session'
+    me = parent / 'grid-one'
+    me.mkdir(parents=True)
+    sidecar_at(parent / 'grid-two', bcs.SIDECAR_LOCATIONS[0],
+               [detected(916.0, 1030.0, (2048, 2048)),
+                detected(460.0, 512.0, (1024, 1024), trusted=False)])
+    sidecar_at(parent / 'grid-three', bcs.SIDECAR_LOCATIONS[0],
+               [detected(461.0, 513.0, (1024, 1024), source='session')])
+    sidecar_at(me, bcs.SIDECAR_LOCATIONS[0],          # its own: not a sibling
+               [detected(400.0, 400.0, (1024, 1024))])
+    assert bcs.sibling_centre(me, (1024, 1024)) is None
+    assert bcs.sibling_centre(me, (2048, 2048)).x == 916.0
+
+
+def test_sidecar_locations_can_be_given(tmp_path):
+    parent = tmp_path / 'session'
+    me = parent / 'grid-one'
+    me.mkdir(parents=True)
+    sidecar_at(parent / 'grid-two', 'pictures/beam_center.json',
+               [detected(150.0, 130.0, (256, 320))])
+    assert bcs.sibling_centre(me, (256, 320)) is None
+    found = bcs.sibling_centre(me, (256, 320), locations=('pictures/beam_center.json',))
+    assert (found.x, found.y) == (150.0, 130.0)
+
+
+def test_the_fallback_chain_ends_on_the_sibling_with_the_measurement(tmp_path):
+    parent = tmp_path / 'session'
+    sidecar_at(parent / 'grid-two', bcs.SIDECAR_LOCATIONS[0],
+               [detected(150.0, 130.0, (256, 320))])
+    me = parent / 'grid-one'
+    me.mkdir(parents=True)
+    centres = bcs.find_beam_centres([pattern()],
+                                    fallback=bcs.session_fallback(me))
+    centre = centres[(256, 320)]
+    assert centre.source == bcs.SOURCE_SESSION
+    assert (centre.x, centre.y) == (150.0, 130.0)
+    assert 'not trusted' in centre.note
+    assert centre.rejected is not None and centre.n_frames == 1
+
+
+def test_without_a_sibling_the_rings_go_to_the_frame_centre(tmp_path):
+    me = tmp_path / 'alone' / 'grid-one'
+    me.mkdir(parents=True)
+    centre = bcs.find_beam_centres([pattern()],
+                                   fallback=bcs.session_fallback(me))[(256, 320)]
+    assert centre.source == bcs.SOURCE_FRAME and centre.rejected is not None
+
+
+def test_a_failing_fallback_is_only_a_warning():
+    def explodes(shape):
+        raise RuntimeError('no')
+    centre = bcs.find_beam_centres([pattern()], fallback=explodes)[(256, 320)]
+    assert centre.source == bcs.SOURCE_FRAME
+
+
+def test_the_sidecar_round_trips_and_names_borrowed_from_only_when_used(tmp_path):
+    own = bcs.summarise([(913.0, 1027.0, 'inversion')] * 3, (2048, 2048), 3)
+    borrowed = bcs.BeamCentre(x=150.0, y=130.0, shape=(256, 320),
+                              source=bcs.SOURCE_SESSION, trusted=True,
+                              borrowed_from=['grid-two'])
+    path = bcs.write_sidecar(str(tmp_path), bcs.MODE_AUTO, [own, borrowed])
+
+    record = json.loads(open(path).read())
+    assert 'borrowed_from' not in record['centres'][0]
+    assert record['centres'][1]['borrowed_from'] == ['grid-two']
+
+    back = bcs.read_sidecar(path)
+    assert back[(2048, 2048)] == own
+    assert back[(256, 320)] == borrowed
+    assert bcs.read_sidecar(tmp_path / 'absent.json') == {}
+
+
+def test_a_borrowed_centre_is_written_on_the_picture():
+    fig, ax = plt.subplots()
+    ax.imshow(np.zeros((64, 64)))
+    centre = bcs.BeamCentre(x=30.0, y=31.0, shape=(64, 64),
+                            source=bcs.SOURCE_SESSION, trusted=True,
+                            borrowed_from=['grid-two-reyes'], note='not trusted here')
+    bcs.annotate(ax, centre)
+    assert len(ax.lines) == 1
+    notes = [t.get_text() for t in ax.texts]
+    assert any('SESSION beam centre' in n and 'grid-two' in n for n in notes)

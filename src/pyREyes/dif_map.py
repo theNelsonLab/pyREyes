@@ -38,7 +38,7 @@ from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs,
 from pyREyes.lib.mrc_io import (IMOD_FLAG_SIGNED_BYTES, IMOD_STAMP,  # noqa: F401
                                 mode0_signed as mrc_mode0_signed, mode0_view)
 
-__version__ = '3.6.0'
+__version__ = '3.6.1'
 __min_required_version__ = '3.4.0'
 
 # Configuration Constants

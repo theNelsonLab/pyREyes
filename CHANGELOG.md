@@ -2,6 +2,67 @@
 
 All notable user-facing changes to pyREyes are listed here.
 
+## 3.6.1
+
+A maintenance release: the monitor can be extended by subclassing, and a few
+stage outputs carry more information. The command-line interface and the
+behaviour of every stage are unchanged; `dif-map-2` results are identical to
+3.6.0.
+
+### Monitor (`reyes-monitor`)
+- `REyesProcessor` has documented extension points, so a monitor for a
+  different workflow can be built on it without copying it: `module_commands()`
+  (the stages it can run), `run_module_code()` (a stage's exit status;
+  `run_module()` keeps returning True/False), `status_payload()` (the
+  `session_status.json` document), `abort_states` / `idle_states` (the waits
+  in which a SerialEM abort or the idle backstop stops it), `MONITOR_OWNED`
+  (entries of the session root it writes itself), `after_eucentricity_state()`
+  (the state entered once eucentricity has run), `after_movie()` (called once a
+  movie's autoprocess run has finished) and `busy_elsewhere` (a tick with work
+  in flight outside the process does not count as idle). See "Extending the
+  monitor" in `docs/modules/monitor.md`. The classic monitor's behaviour,
+  state sequence, log phrases and `session_status.json` keys are unchanged.
+- A stage's exit status is logged as before; the monitor's log line after
+  eucentricity now names the state it enters (`Moving to
+  WAITING_FOR_DIFFRACTION_MAP`).
+
+### Eucentricity (`eucentricity-1`)
+- The fitted plane is written to `grid_squares/eucentricity_plane.json`:
+  the coefficients of `z = a*x + b*y + c` at full precision, their standard
+  errors and covariance, `r2`, `n_points`, and `trusted` (true when R^2 >= 0.65
+  on at least 4 measurements). The navigator correction itself is unchanged;
+  the file is for tools that want to put a position on the plane and need to
+  know how well it was determined. If the file cannot be written the stage
+  still succeeds.
+
+### Snapshots (`write-targets-3`, `append-targets-3-1`, `create-final-targets-4`)
+- The beam-centre search can borrow a centre from a sibling session (another
+  session directory under the same parent) whose `targets/beam_center.json`
+  holds a detected, trusted centre on frames of the same size, when its own
+  frames do not settle it (`beam_center_search.find_beam_centres(fallback=
+  session_fallback(...))`, `sibling_centre`, `read_sidecar`). A borrowed
+  centre is marked on the snapshot and recorded in `beam_center.json` with
+  `source: "session"` and `borrowed_from`; a sidecar that borrowed nothing is
+  written exactly as in 3.6.0. The shipped stages do not use the fallback
+  yet, so their pictures are unchanged.
+
+### Library
+- `pyREyes.lib.mrc_io.read(path)` and `frames(path, mmap=False)` read an MRC
+  file with the mode-0 signedness rule applied, for code that needs the data
+  rather than a view of an array it already holds.
+- `pyREyes.lib.REyes_logging.format_record(key, *fields)` builds the
+  `KEY | field=value | ...` machine records the logs use (missing values
+  print as `NA`, lists comma-joined, never a `|` or a line break inside a
+  value).
+- `microscope_configs.json` may carry two optional fields per microscope,
+  `autoprocess_config` (the pyautoprocess configuration name to use for its
+  movies when it differs from the pyREyes name) and `camera_length_calibrated`
+  (mm). A configuration without them loads as before; a field without a
+  default that is missing is still an error. Of the shipped configurations
+  only `Arctica-Apollo-SM` sets `autoprocess_config` (`Talos-Apollo-SM`, the
+  pyautoprocess name for that camera geometry); nothing in this release reads
+  the fields yet.
+
 ## 3.6.0
 
 ### Monitor (`reyes-monitor`)

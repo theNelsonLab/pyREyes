@@ -54,11 +54,12 @@ SKIP_DELAY = object()  # go straight round the loop without the polling delay
 DEFAULT_IDLE_TIMEOUT = 0
 
 # Entries of a session root that the MONITOR writes. Their changes are not
-# arrivals from the microscope, so they never reset the idle clock.
-MONITOR_OWNED = frozenset({
+# arrivals from the microscope, so they never reset the idle clock. The
+# default of `REyesProcessor.MONITOR_OWNED`.
+MONITOR_OWNED = (
     'REyes_logs', 'dif_maps', 'targets', 'reyes_temp', 'grid_squares',
     'session_status.json', '.DS_Store',
-})
+)
 
 
 class MonitorTerminated(KeyboardInterrupt):
@@ -160,7 +161,7 @@ class CustomHelpFormatter(argparse.HelpFormatter):
             return text.splitlines()
         return super()._split_lines(text, width)
 
-__version__ = '3.6.0'
+__version__ = '3.6.1'
 __min_required_version__ = '3.4.0'
 
 # The movie log, and the logs SerialEM writes when the movie stage is re-entered
@@ -170,11 +171,12 @@ _MOVIE_LOG_RE = re.compile(r'.+_targets(?:-\d+)?\.log$')
 
 # Waits on SerialEM in which an abort stops the monitor at once. The step-scan
 # and movie waits handle an abort themselves, after finishing what has already
-# arrived.
+# arrived. The default of `REyesProcessor.abort_states`.
 ABORT_STATES = frozenset({ProcessingState.WAITING_FOR_MONTAGE,
                           ProcessingState.WAITING_FOR_GRID_SQUARES})
 
 # States in which the monitor waits on SerialEM, not on itself (--idle-timeout).
+# The default of `REyesProcessor.idle_states`.
 IDLE_STATES = frozenset({ProcessingState.WAITING_FOR_MONTAGE,
                          ProcessingState.WAITING_FOR_GRID_SQUARES,
                          ProcessingState.WAITING_FOR_DIFFRACTION_MAP,
@@ -191,6 +193,11 @@ MISSING_BLOCK_POLLS = 3
 
 
 class REyesProcessor:
+    # Entries of the session root that this monitor writes itself; their
+    # changes never reset the idle clock. A subclass that writes more entries
+    # may extend the tuple.
+    MONITOR_OWNED = MONITOR_OWNED
+
     def __init__(self,
              working_directory='.',
              microscope='Arctica-CETA',
@@ -275,11 +282,24 @@ class REyesProcessor:
         self.autosolve_timeout = autosolve_timeout
         self.poll_interval = poll_interval
         self.processed_logs = set()
+        # What the monitor writes in the session root.
+        self.targets_dir = os.path.join(self.working_directory, 'targets')
+        self.status_path = os.path.join(self.working_directory,
+                                        'session_status.json')
 
         # --- the ways a session ends without its success phrases ----------- #
         # 0/None switches the idle backstop off.
         self.idle_timeout = idle_timeout or None
         self._idle_clock = None          # (signature, monotonic time, state)
+        # The waits in which a SerialEM abort stops the monitor at once, and
+        # those in which the idle backstop runs. The module constants are the
+        # defaults; a subclass with more waiting states adds them here.
+        self.abort_states = frozenset(ABORT_STATES)
+        self.idle_states = frozenset(IDLE_STATES)
+        # Set by a tick that has work in flight outside this process (for
+        # example a batch job it submitted), so the idle backstop does not end
+        # the session. Reset to False at the top of every monitor tick.
+        self.busy_elsewhere = False
         self._status_written = False
         self.stop_reason = None          # set by the SIGTERM handler
         # An abort counts until SerialEM demonstrably resumed after it (a newer
@@ -366,29 +386,53 @@ class REyesProcessor:
         self.logger.info(f"Initializing with state: {self.state.name}")
         self.logger.info(f"Current block: {self.current_block}")
     
+    def module_commands(self):
+        """The stages this monitor can run, by name. Returns a new dict.
+
+        Maps a stage name, as `run_module` takes it, to the argv prefix that
+        starts it (the console-script name, possibly with fixed arguments).
+        A subclass may override this to add stages.
+        """
+        return {
+            'grid_squares': ['grid-squares-0'],
+            'manual_squares': ['manual-squares-0-1'],
+            'eucentricity': ['eucentricity-1'],
+            'dif_map': ['dif-map-2'],
+            'write_targets': ['write-targets-3'],
+            'append_targets': ['append-targets-3-1'],
+            'create_final_targets': ['create-final-targets-4'],
+            'mnt_maps_targets': ['mnt-maps-targets-5'],
+        }
+
     def run_module(self, module_name, args=None):
-        """Run a package module as a subprocess command with arguments"""
+        """Run a package module as a subprocess command with arguments.
+
+        True when the stage exited 0; `run_module_code` gives the code itself.
+        """
+        return self.run_module_code(module_name, args) == 0
+
+    def run_module_code(self, module_name, args=(), positional=()):
+        """Run a stage as a subprocess and return its exit status.
+
+        `args` is a mapping of option name to value: a True flag becomes
+        `--name`, a list `--name v1 v2 ...`, anything else `--name value`
+        (underscores in the name become dashes). `positional` arguments go
+        after the options. The result is the subprocess's return code; a
+        stage that cannot run at all -- a name `module_commands` does not
+        know, a timeout (its process group is killed) or an exception while
+        starting it -- gives 1. The base class gives no exit code a special
+        meaning.
+        """
         try:
             self.logger.info(f"Running module: {module_name}")
 
-            # Map module names to their corresponding command line names
-            module_commands = {
-                'grid_squares': 'grid-squares-0',
-                'manual_squares': 'manual-squares-0-1',
-                'eucentricity': 'eucentricity-1',
-                'dif_map': 'dif-map-2',
-                'write_targets': 'write-targets-3',
-                'append_targets': 'append-targets-3-1',
-                'create_final_targets': 'create-final-targets-4',
-                'mnt_maps_targets': 'mnt-maps-targets-5'
-            }
-
+            module_commands = self.module_commands()
             if module_name not in module_commands:
                 self.logger.error(f"Module {module_name} not found")
-                return False
+                return 1
 
             # Construct the command with the entry point name
-            cmd = [module_commands[module_name]]
+            cmd = list(module_commands[module_name])
             
             # Add arguments if provided
             if args:
@@ -403,6 +447,9 @@ class REyesProcessor:
                     else:
                         cmd.append(f"--{key.replace('_', '-')}")
                         cmd.append(str(value))
+
+            if positional:
+                cmd.extend(str(v) for v in positional)
 
             self.logger.info(f"Running command: {' '.join(cmd)}")
             
@@ -420,22 +467,21 @@ class REyesProcessor:
 
             if result.returncode == 0:
                 self.logger.info(f"Successfully executed {module_name}")
-                return True
             else:
                 self.logger.error(f"{module_name} failed with return code {result.returncode}")
-                return False
+            return result.returncode
 
         except TimeoutExpired:
             self.logger.error(
                 f"{module_name} exceeded the {self.subprocess_timeout}s timeout "
                 f"and its process group was killed"
             )
-            return False
+            return 1
         except Exception as e:
             self.logger.error(f"Error running module {module_name}: {str(e)}")
             import traceback
             self.logger.error(traceback.format_exc())
-            return False
+            return 1
 
     def find_nav_files(self):
         """Find .nav files and extract their information"""
@@ -821,6 +867,11 @@ class REyesProcessor:
                 ok, note = run_for_movie(
                     cmd, movie_dir, self.movie_timeout, run_with_timeout,
                     logger=self.logger)
+                try:
+                    self.after_movie(movie_dir, ok)
+                except Exception as exc:    # a hook never changes the verdict
+                    self.logger.error(
+                        f"after_movie failed for {movie_dir}: {exc}")
                 if ok:
                     self.logger.info(
                         f"Successfully processed movie "
@@ -851,6 +902,18 @@ class REyesProcessor:
     # with: after autoprocess succeeds, or when it is abandoned (its content
     # then says why).
     AUTOPROCESS_FLAG = _AUTOPROCESS_FLAG
+
+    def after_movie(self, movie_dir, ok):
+        """Called once a movie's autoprocess run has finished.
+
+        `movie_dir` is the movie's dataset directory and `ok` whether the run
+        succeeded (autoprocess exited 0 and left output). Runs after
+        `run_for_movie` has returned -- so after `autoprocess_done.flag` has
+        been written for a processed or an abandoned movie -- and only for
+        movies processed by this monitor with --autoprocess, not for movies
+        found already done. An exception raised here is logged and does not
+        change the movie's result. The base class does nothing.
+        """
 
     def _movie_already_done(self, movie_dir, acquired_name):
         """True if this movie has already been handled, judged from disk.
@@ -992,9 +1055,18 @@ class REyesProcessor:
             if self.check_grid_squares_completion(log_file):
                 self.processed_logs.add(log_file)
                 if self.run_module('eucentricity', {}):
-                    self.state = ProcessingState.WAITING_FOR_DIFFRACTION_MAP
-                    self.logger.info("Moving to diffraction map monitoring state")
+                    self.state = self.after_eucentricity_state()
+                    self.logger.info(f"Moving to {self.state.name}")
         return None
+
+    def after_eucentricity_state(self):
+        """The state the monitor enters once eucentricity has run.
+
+        WAITING_FOR_DIFFRACTION_MAP: the step-scan follows. A subclass whose
+        workflow continues differently after eucentricity returns its own
+        state (one that `state_handlers` knows).
+        """
+        return ProcessingState.WAITING_FOR_DIFFRACTION_MAP
 
     # --------------------------------------------------------- step-scan #
     # A block advances on "completed stepscan for current grid square". A
@@ -1044,8 +1116,7 @@ class REyesProcessor:
 
     def _record_set_aside(self, entries):
         try:
-            return serialem.record_set_aside(
-                os.path.join(self.working_directory, 'targets'), entries)
+            return serialem.record_set_aside(self.targets_dir, entries)
         except OSError as exc:
             self.logger.error(f"could not update the set-aside list: {exc}")
             return []
@@ -1408,12 +1479,8 @@ class REyesProcessor:
         """
         if self._status_written:
             return
-        path = os.path.join(self.working_directory, 'session_status.json')
-        payload = {'state': state, 'detail': detail,
-                   'utc': datetime.now(timezone.utc).strftime(
-                       '%Y-%m-%dT%H:%M:%SZ')}
-        if reason:
-            payload['reason'] = reason
+        path = self.status_path
+        payload = self.status_payload(state, detail, reason)
         try:
             tmp = str(path) + '.tmp'
             with open(tmp, 'w', newline='\n') as f:
@@ -1424,6 +1491,18 @@ class REyesProcessor:
             self.logger.info(f"SESSION_STATUS | state={state} | {path}")
         except OSError as exc:
             self.logger.error(f"could not write session_status.json: {exc}")
+
+    def status_payload(self, state, detail, reason=None):
+        """The session_status.json document for a state. Override to add keys.
+
+        `state`, `detail`, `utc` (ISO 8601, UTC) and, when given, `reason`.
+        """
+        payload = {'state': state, 'detail': detail,
+                   'utc': datetime.now(timezone.utc).strftime(
+                       '%Y-%m-%dT%H:%M:%SZ')}
+        if reason:
+            payload['reason'] = reason
+        return payload
 
     def _completed_status(self):
         """The verdict of a monitor that has processed everything it got."""
@@ -1479,7 +1558,7 @@ class REyesProcessor:
             return None
         for entry in entries:
             name = entry.name
-            if name in MONITOR_OWNED or name.startswith('.') or name.endswith('.tmp'):
+            if name in self.MONITOR_OWNED or name.startswith('.') or name.endswith('.tmp'):
                 continue
             try:
                 stat = entry.stat()
@@ -1492,8 +1571,13 @@ class REyesProcessor:
         return (count, newest, log_bytes) if count else None
 
     def _idle_expired(self):
-        """True (and the session ended) when SerialEM has gone quiet too long."""
-        if not self.idle_timeout or self.state not in IDLE_STATES:
+        """True (and the session ended) when SerialEM has gone quiet too long.
+
+        Not while `busy_elsewhere` is set: a tick with work in flight outside
+        this process is not idle, and the idle clock starts afresh after it.
+        """
+        if not self.idle_timeout or self.state not in self.idle_states \
+                or self.busy_elsewhere:
             self._idle_clock = None
             return False
         signature = self._arrival_signature()
@@ -1530,6 +1614,7 @@ class REyesProcessor:
         try:
             while True:
                 handler = handlers.get(self.state)
+                self.busy_elsewhere = False
                 before = self.state
                 # A state with no handler (COMPLETED) simply polls.
                 outcome = handler() if handler is not None else None
@@ -1537,7 +1622,7 @@ class REyesProcessor:
                 if outcome is STOP:
                     return
                 if outcome is None and self.state == before \
-                        and self.state in ABORT_STATES:
+                        and self.state in self.abort_states:
                     found = self._check_serialem_abort()
                     if found:
                         self._halt(serialem.describe_abort(found),

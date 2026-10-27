@@ -51,7 +51,7 @@ import os
 import re
 from datetime import datetime, timezone
 
-__version__ = '3.6.0'
+__version__ = '3.6.1'
 
 # --------------------------------------------------------------------------- #
 # 1. Ordering

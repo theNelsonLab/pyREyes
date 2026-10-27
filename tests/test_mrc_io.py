@@ -112,3 +112,51 @@ def test_dif_map_shares_the_rule(tmp_path):
     path = write_mode0(tmp_path / 'f.mrc', counts)
     data, _ = dm.load_diffraction_frame(path)
     assert data.min() >= 0 and data.max() == 255
+
+
+# --------------------------------------------------------------------------- #
+# The readers: frames() and read() apply the rule to a file
+# --------------------------------------------------------------------------- #
+def test_read_gives_unsigned_counts_for_an_unstamped_mode0_file(tmp_path):
+    counts = bright_counts()
+    path = write_mode0(tmp_path / 'f.mrc', counts)
+    data = mrc_io.read(path)
+    assert data.dtype == np.uint8
+    np.testing.assert_array_equal(data, counts)
+    assert data.flags.owndata                              # a copy, usable after
+
+
+def test_read_keeps_imod_signed_mode0_as_int8(tmp_path):
+    counts = bright_counts()
+    path = write_mode0(tmp_path / 'f.mrc', counts, imod_signed=True)
+    data = mrc_io.read(path)
+    assert data.dtype == np.int8
+    np.testing.assert_array_equal(data, counts.view(np.int8))
+
+
+def test_read_without_the_signed_flag_is_unsigned(tmp_path):
+    path = write_mode0(tmp_path / 'f.mrc', bright_counts(), imod_signed=False)
+    assert mrc_io.read(path).dtype == np.uint8
+
+
+@pytest.mark.parametrize('dtype', [np.int16, np.uint16, np.float32])
+def test_read_and_frames_leave_other_modes_untouched(tmp_path, dtype):
+    values = (np.arange(64 * 64).reshape(64, 64) % 300).astype(dtype)
+    path = str(tmp_path / 'f.mrc')
+    with mrcfile.new(path) as mrc:
+        mrc.set_data(values)
+    data = mrc_io.read(path)
+    assert data.dtype == dtype
+    np.testing.assert_array_equal(data, values)
+    with mrc_io.frames(path, mmap=True) as mapped:
+        assert mapped.dtype == dtype
+
+
+def test_frames_mmap_is_a_view_not_a_copy(tmp_path):
+    counts = bright_counts((5, 64, 64))
+    path = write_mode0(tmp_path / 'movie.mrc', counts)
+    with mrc_io.frames(path, mmap=True) as data:
+        assert isinstance(data, np.memmap)
+        assert data.dtype == np.uint8
+        assert not data.flags.owndata
+        np.testing.assert_array_equal(data[3], counts[3])

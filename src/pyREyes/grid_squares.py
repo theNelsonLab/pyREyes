@@ -15,7 +15,7 @@ matplotlib.use('Agg')  # files only; never a GUI backend, even with X11 forwardi
 from shapely.ops import unary_union
 from typing import List, Optional, Tuple
 
-__version__ = '3.6.0'
+__version__ = '3.6.1'
 __min_required_version__ = '3.4.0'
 
 from pyREyes.lib.ui.REyes_ui import print_banner

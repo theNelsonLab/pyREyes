@@ -27,6 +27,15 @@ sidecar; it is never silent. What WAS measured is kept in the sidecar
 (`rejected`, `n_frames`, `n_agree`, ...), so an untrusted search can still be
 audited.
 
+Before falling back to the frame centre, a caller may offer a SESSION centre
+(`sibling_centre`, via `find_beam_centres(fallback=session_fallback(...))`):
+the trusted, detected centre of a sibling session in the same parent
+directory, on frames of the SAME SHAPE. The beam does not move between the
+grids of one session, and a grid with only one or two patterns has too few
+frames to outvote a bad answer on its own. A borrowed centre is labelled as
+such on the picture, in the log and in the sidecar (`source = "session"`,
+`borrowed_from`). A centre is never rescaled from one frame size to another.
+
 THIS MOVES PICTURES, NOT NUMBERS
 --------------------------------
 Nothing here feeds a metric. Peak counts and quality classes keep their own
@@ -37,14 +46,14 @@ changes.
 import json
 import logging
 import os
-from dataclasses import asdict, dataclass, field
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from dataclasses import asdict, dataclass, field, replace
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
 from pyREyes.lib.REyes_logging import log_print
 
-__version__ = '3.6.0'
+__version__ = '3.6.1'
 
 # How the centre of a snapshot is chosen.
 MODE_AUTO = 'auto'      # search the frames; fall back to the frame centre, visibly
@@ -53,6 +62,13 @@ MODE_FRAME = 'frame'    # the middle of the frame: what 3.4.10 and earlier drew
 SOURCE_DETECTED = 'detected'
 SOURCE_GIVEN = 'given'
 SOURCE_FRAME = 'frame'
+SOURCE_SESSION = 'session'   # borrowed from a sibling session (same parent directory)
+
+# Where a session's sidecars live, relative to its directory. Searched, in this
+# order, for a sibling's trusted centre (`sibling_centre`, `session_fallback`).
+SIDECAR_LOCATIONS = (
+    'targets/beam_center.json',
+)
 
 # Frames estimated per frame size. Each costs 0.2 to 0.4 s.
 MAX_FRAMES = 25
@@ -94,6 +110,8 @@ class BeamCentre:
     # An untrusted search's own answer, kept so the sidecar records what was
     # measured even when the rings are not drawn about it.
     rejected: Optional[Dict[str, float]] = None
+    # For SOURCE_SESSION: the sibling session(s) the centre was borrowed from.
+    borrowed_from: List[str] = field(default_factory=list)
 
     @property
     def measured(self) -> bool:
@@ -115,6 +133,9 @@ class BeamCentre:
             return f"frame centre {where}" + (f" -- {self.note}" if self.note else '')
         if self.source == SOURCE_GIVEN:
             return f"given {where}"
+        if self.source == SOURCE_SESSION:
+            return (f"session centre {where}, borrowed from sibling session(s) "
+                    f"{', '.join(self.borrowed_from)}")
         offset = np.hypot(self.x - (width - 1) / 2.0, self.y - (height - 1) / 2.0)
         return (f"detected {where}, {offset:.1f} px from the frame centre; "
                 f"{self.n_agree} of {self.n_frames} frames agree to {self.spread_px:.1f} px")
@@ -251,13 +272,16 @@ def summarise(estimates: Sequence[Tuple[float, float, str]], shape: Shape,
                       note='; '.join(reasons))
 
 
-def find_beam_centres(frames: Iterable[np.ndarray]) -> Dict[Shape, BeamCentre]:
+def find_beam_centres(frames: Iterable[np.ndarray],
+                      fallback: Optional[Callable[[Shape], Optional[BeamCentre]]] = None,
+                      ) -> Dict[Shape, BeamCentre]:
     """One centre for each frame size among `frames`.
 
     A session can hold more than one binning, and a centre in pixels means
     nothing without the frame it was measured on, so sizes are kept apart.
-    An untrusted result is replaced by the frame centre, carrying the reason
-    and what was measured.
+    An untrusted result is replaced by `fallback(shape)` when one is given and
+    finds something (for example `session_fallback`), otherwise by the frame
+    centre -- either way carrying the reason and what was measured.
     """
     by_shape: Dict[Shape, List[np.ndarray]] = {}
     for frame in frames:
@@ -281,22 +305,103 @@ def find_beam_centres(frames: Iterable[np.ndarray]) -> Dict[Shape, BeamCentre]:
         else:
             reason = found.note
             log_print(f"  beam centre: {found.note}", logging.WARNING)
-        centres[shape] = untrusted(shape, reason, found)
+        centres[shape] = untrusted(shape, reason, found, fallback)
     return centres
 
 
-def untrusted(shape: Shape, reason: str, found: Optional[BeamCentre]) -> BeamCentre:
-    """The frame centre, for a frame size whose search did not settle it.
+def untrusted(shape: Shape, reason: str, found: Optional[BeamCentre],
+              fallback: Optional[Callable[[Shape], Optional[BeamCentre]]] = None
+              ) -> BeamCentre:
+    """What to draw about when the search of these frames did not settle it.
 
-    The measurement that was not trusted travels with it.
+    A centre from `fallback` if it offers one, else the frame centre. Either
+    way the measurement that was not trusted travels with it.
     """
     shape = (int(shape[0]), int(shape[1]))
+    borrowed = None
+    if fallback is not None:
+        try:
+            borrowed = fallback(shape)
+        except Exception as exc:     # a picture must never stop a stage
+            log_print(f"  beam centre: fallback failed "
+                      f"({type(exc).__name__}: {exc})", logging.WARNING)
+            borrowed = None
+    if borrowed is not None:
+        log_print(f"  beam centre: {borrowed.describe()} ({reason})",
+                  logging.WARNING)
+        if found is None:
+            return replace(borrowed, note=reason)
+        return replace(borrowed, note=reason, n_frames=found.n_frames,
+                       n_ok=found.n_ok, n_agree=found.n_agree,
+                       spread_px=found.spread_px, methods=dict(found.methods),
+                       rejected=_rejected_of(found))
     log_print(f"  beam centre: no trusted centre from these frames; frame "
               f"centre {shape[1]}x{shape[0]}", logging.WARNING)
     if found is None or found.source == SOURCE_FRAME and found.rejected is None \
             and found.n_frames == 0:
         return frame_centre(shape, note=reason)
     return frame_centre(shape, note=reason, measured=found)
+
+
+def sibling_centre(session_root, shape: Shape,
+                   locations: Sequence[str] = SIDECAR_LOCATIONS
+                   ) -> Optional[BeamCentre]:
+    """A trusted centre measured in a sibling session, or None.
+
+    Siblings are the other directories under the parent of `session_root`,
+    each searched at `locations` for a sidecar. Only a centre that was
+    DETECTED and TRUSTED on frames of exactly `shape` is taken -- never a
+    borrowed one (no chains), never a frame centre, never a rescaled one.
+    Several siblings give their median.
+    """
+    from pathlib import Path
+
+    shape = (int(shape[0]), int(shape[1]))
+    root = Path(session_root).resolve()
+    parent = root.parent
+    found: List[Tuple[str, float, float]] = []
+    try:
+        siblings = sorted(p for p in parent.iterdir() if p.is_dir())
+    except OSError:
+        return None
+    for sibling in siblings:
+        if sibling.resolve() == root:
+            continue
+        for rel in locations:
+            path = sibling / rel
+            if not path.is_file():
+                continue
+            try:
+                with open(path) as handle:
+                    record = json.load(handle)
+            except (OSError, ValueError):
+                continue
+            for c in record.get('centres', []):
+                try:
+                    c_shape = (int(c['shape'][0]), int(c['shape'][1]))
+                except (KeyError, TypeError, IndexError, ValueError):
+                    continue
+                if (c_shape == shape and c.get('source') == SOURCE_DETECTED
+                        and c.get('trusted')):
+                    found.append((sibling.name, float(c['x']), float(c['y'])))
+                    break
+            else:
+                continue
+            break       # one sidecar per sibling is enough
+    if not found:
+        return None
+    names = [name for name, _, _ in found]
+    x = float(np.median([f[1] for f in found]))
+    y = float(np.median([f[2] for f in found]))
+    return BeamCentre(x=x, y=y, shape=shape, source=SOURCE_SESSION, trusted=True,
+                      borrowed_from=names)
+
+
+def session_fallback(session_root, locations: Sequence[str] = SIDECAR_LOCATIONS):
+    """`fallback` for `find_beam_centres`: the sibling sessions' centre."""
+    def fallback(shape: Shape) -> Optional[BeamCentre]:
+        return sibling_centre(session_root, shape, locations)
+    return fallback
 
 
 def resolve(mode: Mode, shape: Shape,
@@ -327,7 +432,13 @@ def annotate(ax, centre: BeamCentre) -> None:
                 markersize=12, markeredgewidth=1.0, linestyle='none')
         ax.set_xlim(-0.5, centre.shape[1] - 0.5)
         ax.set_ylim(centre.shape[0] - 0.5, -0.5)
-        if centre.source == SOURCE_DETECTED and centre.note:
+        if centre.source == SOURCE_SESSION:
+            names = ', '.join(n[:-len('-reyes')] if n.endswith('-reyes') else n
+                              for n in centre.borrowed_from)
+            _note(ax, f"rings on SESSION beam centre from sibling session(s) "
+                      f"{names}; this session: {centre.note or 'not searched'}",
+                  'darkorange')
+        elif centre.source == SOURCE_DETECTED and centre.note:
             # e.g. found on the wider sample: say where it came from
             _note(ax, f"beam centre {centre.note}", 'dimgrey')
     elif centre.note:
@@ -341,11 +452,19 @@ def write_sidecar(out_dir: str, mode: Mode,
     """Record beside the snapshots what their rings were drawn about."""
     from pyREyes.lib.diffraction.beam_center import ALGORITHM_VERSION
 
+    # `borrowed_from` is written only for a borrowed centre, so the sidecar of
+    # a session that borrowed nothing reads exactly as before.
+    def entry(centre: BeamCentre) -> dict:
+        values = asdict(centre)
+        if not values.get('borrowed_from'):
+            values.pop('borrowed_from', None)
+        return values
+
     record = {
         'mode': list(mode) if isinstance(mode, tuple) else mode,
         'algorithm': ALGORITHM_VERSION,
         'convention': 'x along columns, y along rows, zero-based pixel centres',
-        'centres': [asdict(c) for c in centres],
+        'centres': [entry(c) for c in centres],
     }
     path = os.path.join(out_dir, SIDECAR)
     try:
@@ -357,3 +476,23 @@ def write_sidecar(out_dir: str, mode: Mode,
         log_print(f"  beam centre: could not write {path} ({exc})", logging.WARNING)
         return None
     return path
+
+
+def read_sidecar(path) -> Dict[Shape, BeamCentre]:
+    """The centres a sidecar recorded, by frame shape ({} if unreadable)."""
+    try:
+        with open(path) as handle:
+            record = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    known = set(BeamCentre.__dataclass_fields__)
+    out: Dict[Shape, BeamCentre] = {}
+    for c in record.get('centres', []):
+        try:
+            values = {k: v for k, v in c.items() if k in known}
+            values['shape'] = (int(c['shape'][0]), int(c['shape'][1]))
+            centre = BeamCentre(**values)
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+        out[centre.shape] = centre
+    return out

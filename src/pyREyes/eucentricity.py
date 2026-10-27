@@ -3,6 +3,7 @@ REyes NEC (Navigator Eucentricity Corrector)
 A tool for processing electron microscope stage positions and correcting eucentricity tilt.
 """
 
+import json
 import logging
 import os
 import re
@@ -22,8 +23,16 @@ from pyREyes.lib.ui.REyes_ui import print_banner
 from pyREyes.lib.REyes_logging import setup_logging, log_print
 from pyREyes.lib.REyes_errors import ProcessingError
 
-__version__ = '3.6.0'
+__version__ = '3.6.1'
 __min_required_version__ = '3.4.0'
+
+# A fitted plane is recorded as `trusted` in eucentricity_plane.json only when
+# the fit that produced it is good enough to be worth applying elsewhere. The
+# fit quality that counts is the one against the raw fine-eucentricity
+# measurements (a handful of points): refitting from the corrected navigator,
+# whose Z values were computed from the plane, returns R^2 = 1 tautologically.
+PLANE_MIN_R2 = 0.65
+PLANE_MIN_POINTS = 4
 
 @dataclass
 class RegressionResult:
@@ -32,6 +41,26 @@ class RegressionResult:
     b: float
     c: float
     df: pd.DataFrame
+    # Fit quality. se_* are None when there are too few points to estimate them
+    # (the residual variance needs n > 3 for three parameters).
+    se_a: Optional[float] = None
+    se_b: Optional[float] = None
+    se_c: Optional[float] = None
+    r2: Optional[float] = None
+    n_points: int = 0
+    # Full 3x3 covariance of (a, b, c), row-major. The standard errors above
+    # are only its diagonal; se_c is the uncertainty at the ORIGIN, and stage
+    # positions sit hundreds of microns out, so the slope terms contribute.
+    # With the full matrix the prediction standard error at any (x, y) is
+    #     sd(z) = sqrt( [x y 1] . cov . [x y 1]^T )
+    covariance: Optional[List[List[float]]] = None
+
+    @property
+    def trusted(self) -> bool:
+        """Whether this plane is well enough determined to be applied elsewhere."""
+        return (self.r2 is not None
+                and self.r2 >= PLANE_MIN_R2
+                and self.n_points >= PLANE_MIN_POINTS)
 
 def locate_files() -> Tuple[str, str]:
     """Locate required log and nav files."""
@@ -142,12 +171,71 @@ def perform_regression(coordinates: List[List[float]]) -> RegressionResult:
         
         # Print formatted output
         log_print(output)
-        log_print(f"\nR^2: {reg.score(X, y):.4f}")
-        
-        return RegressionResult(a=a, b=b, c=c, df=df)
-        
+        r2 = float(reg.score(X, y))
+        log_print(f"\nR^2: {r2:.4f}")
+
+        # The standard errors are only meaningful once there are more points
+        # than parameters; below that the residual variance divides by zero and
+        # std_errors comes back non-finite. Report them as absent rather than
+        # as infinity, and let `trusted` fail on n_points.
+        se_is_usable = n > 3 and bool(np.all(np.isfinite(std_errors)))
+
+        return RegressionResult(
+            a=a, b=b, c=c, df=df,
+            se_a=float(std_errors[0]) if se_is_usable else None,
+            se_b=float(std_errors[1]) if se_is_usable else None,
+            se_c=float(std_errors[2]) if se_is_usable else None,
+            r2=r2,
+            n_points=n,
+            covariance=[[float(v) for v in row] for row in covariance_matrix]
+                       if se_is_usable else None,
+        )
+
     except Exception as e:
         raise ProcessingError(f"Error performing regression: {str(e)}") from e
+
+
+def write_plane_json(result: RegressionResult, output_dir: str) -> str:
+    """Write the eucentric plane to `<output_dir>/eucentricity_plane.json`.
+
+    The log line is lossy -- `z = 0.004x + 0.008y + 49.77`, three decimals on
+    the slopes and two on the intercept, where a slope may itself be
+    0.004 +/- 0.003. The file carries the coefficients at full precision AND
+    the fit quality that says whether they may be applied at all. A tool that
+    uses the plane should check `trusted` rather than read a, b, c and hope.
+    """
+    plane = {
+        'a': result.a,
+        'b': result.b,
+        'c': result.c,
+        'se_a': result.se_a,
+        'se_b': result.se_b,
+        'se_c': result.se_c,
+        'r2': result.r2,
+        'n_points': result.n_points,
+        'covariance': result.covariance,
+        'trusted': result.trusted,
+        'min_r2': PLANE_MIN_R2,
+        'min_points': PLANE_MIN_POINTS,
+        'equation': 'z = a*x + b*y + c',
+    }
+
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, 'eucentricity_plane.json')
+    with open(path, 'w') as handle:
+        json.dump(plane, handle, indent=2, allow_nan=False)
+        handle.write('\n')
+
+    log_print(f"\nEucentric plane written to {path}")
+    if not result.trusted:
+        log_print(
+            f"WARNING: plane fit is NOT trusted "
+            f"(R^2={result.r2:.4f} needs >= {PLANE_MIN_R2}, "
+            f"n={result.n_points} needs >= {PLANE_MIN_POINTS}). "
+            f"Tools that use the plane should fall back to the uncorrected Z.",
+            logging.WARNING
+        )
+    return path
 
 def extract_nav_coordinates(nav_file: str) -> List[List[float]]:
     """Extract coordinates from NAV file."""
@@ -358,7 +446,16 @@ def main() -> int:
         except Exception as e:
             log_print(f"Calculation error: {str(e)}", logging.ERROR)
             return 1
-            
+
+        # Record the plane for later use. Deliberately NOT fatal: the
+        # navigator is already corrected, and a reader of the file falls
+        # back to the uncorrected Z when it is absent.
+        try:
+            write_plane_json(regression_result, os.path.dirname(nav_file))
+        except Exception as e:
+            log_print(f"Could not write eucentricity plane JSON: {str(e)}",
+                      logging.ERROR)
+
         # Create and save visualizations
         try:
             orig_df = pd.DataFrame(orig_coordinates, columns=['x', 'y', 'z'])

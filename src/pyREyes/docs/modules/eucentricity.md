@@ -1,6 +1,6 @@
 # REyes Navigator Eucentricity Corrector (NEC)
 
-**Part of pyREyes v3.6.0** - Eucentricity tilt correction tool
+**Part of pyREyes v3.6.1** - Eucentricity tilt correction tool
 
 Automatically corrects eucentric height by fitting a plane to stage positions and adjusting Z coordinates in navigation files.
 
@@ -47,6 +47,7 @@ eucentricity-1
 
 - **`grid_squares/grid_squares.nav`** - Updated with corrected Z coordinates
 - **`grid_squares/eucentricity_correction.png`** - 6-panel visualization of the regression model
+- **`grid_squares/eucentricity_plane.json`** - The fitted plane and its quality (since 3.6.1), see below
 - **`REyes_logs/eucentricity_correction.log`** - Plane equation and statistics
 
 ---
@@ -54,6 +55,9 @@ eucentricity-1
 ## Processing Details
 
 Fits plane equation `z = ax + by + c` to coordinate data using linear regression, then updates navigation file Z coordinates based on fitted plane.
+
+### The plane file
+`grid_squares/eucentricity_plane.json` records the fitted plane at full precision (the log prints it rounded): `a`, `b`, `c`, their standard errors `se_a`, `se_b`, `se_c`, the 3x3 `covariance` of (a, b, c), `r2`, `n_points`, and `trusted`, which is true when R^2 is at least `min_r2` (0.65) on at least `min_points` (4) measurements. The standard errors and covariance are `null` when there are too few points to estimate them. Downstream tools that place a position on the plane may use the file and should check `trusted` first; the fit quality recorded is the one against the fine-eucentricity measurements, since a refit from the corrected navigator returns R^2 = 1 by construction. The file is written beside `grid_squares.nav`; if it cannot be written the stage still succeeds.
 
 ---
 

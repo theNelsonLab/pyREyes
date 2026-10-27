@@ -28,6 +28,7 @@
         "grid_rule": 3
     },
     "Arctica-Apollo-SM": {
+        "autoprocess_config": "Talos-Apollo-SM",
         "scaling": 1.2,
         "camera_length": 560,
         "pixel_size": 0.016,

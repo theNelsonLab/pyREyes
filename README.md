@@ -1,4 +1,4 @@
-# Diffraction Map Processing Pipeline (REyes v3.6.0)
+# Diffraction Map Processing Pipeline (REyes v3.6.1)
 [![License](https://img.shields.io/badge/License-Academic_Use_Only-blue.svg)](https://github.com/theNelsonLab/pyREyes/blob/main/LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.16971798.svg)](https://doi.org/10.5281/zenodo.16971798)
 
@@ -19,7 +19,7 @@ pyREyes is a Python package to support REyes (Reciprocal Eyes), an end-to-end au
 
 📚 [Full Documentation](https://github.com/theNelsonLab/pyREyes/blob/main/src/pyREyes/docs/README_FULL.md)
 
-📝 [Changelog](https://github.com/theNelsonLab/pyREyes/blob/main/CHANGELOG.md) - what is new in 3.6.0 and how to upgrade from 3.4.x
+📝 [Changelog](https://github.com/theNelsonLab/pyREyes/blob/main/CHANGELOG.md) - what is new in 3.6.1 and 3.6.0, and how to upgrade from 3.4.x
 
 ## Key Features
 - Grid squares detection and atlas management

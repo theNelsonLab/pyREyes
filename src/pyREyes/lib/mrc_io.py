@@ -11,13 +11,17 @@ ringed by false peaks.
 
 Rule: a mode 0 file is unsigned unless its header carries the IMOD stamp with
 the signed-bytes flag set. Detector counts are never negative.
+
+`frames` and `read` open an MRC file through mrcfile and apply the rule, for
+code that needs the data rather than a view of an array it already holds.
 """
 
-from typing import Optional
+import contextlib
+from typing import Iterator, Optional
 
 import numpy as np
 
-__version__ = '3.6.0'
+__version__ = '3.6.1'
 
 # IMOD header stamp and its "bytes are signed" flag (words 39 and 40, 1-based).
 IMOD_STAMP = 1146047817
@@ -57,3 +61,25 @@ def mode0_view(data: np.ndarray, mrc_file: str) -> np.ndarray:
         return data
     want = np.dtype(np.int8) if signed else np.dtype(np.uint8)
     return data if data.dtype == want else data.view(want)
+
+
+@contextlib.contextmanager
+def frames(mrc_file: str, mmap: bool = False) -> Iterator[np.ndarray]:
+    """
+    The data of an MRC file, mode 0 read by the header rule.
+
+    ``mmap=True`` keeps the file memory-mapped (only the frames touched are
+    read). The array is valid inside the ``with`` block only.
+    """
+    import mrcfile
+    opener = mrcfile.mmap if mmap else mrcfile.open
+    with opener(str(mrc_file), mode='r', permissive=True) as handle:
+        yield mode0_view(handle.data, str(mrc_file))
+
+
+def read(mrc_file: str) -> np.ndarray:
+    """The whole MRC file as an in-memory array (a copy), mode 0 by the header rule."""
+    with frames(mrc_file) as data:
+        if data is None:
+            raise ValueError(f"No image data in {mrc_file}")
+        return data.copy()

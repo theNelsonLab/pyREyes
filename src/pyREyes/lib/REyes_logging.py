@@ -42,3 +42,26 @@ def setup_logging(log_file: str, dir_name: str = "REyes_logs", debug: bool = Fal
 def log_print(message: str, level: int = logging.INFO) -> None:
     """Helper function to log messages at specified level (defaults to INFO)."""
     logging.log(level, message)
+
+
+def _record_value(value) -> str:
+    """One field value of a record: None -> NA, lists joined with ','."""
+    if value is None:
+        return 'NA'
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, (list, tuple)):
+        return ','.join(_record_value(v) for v in value) if value else 'NA'
+    text = str(value)
+    # A value never carries the field separator or a line break.
+    return ' '.join(text.replace('|', '/').split())
+
+
+def format_record(key: str, *fields) -> str:
+    """`KEY | field=val | field=val`, the machine-record shape of REyes logs.
+
+    `fields` are (name, value) pairs, in order. Missing values print as NA,
+    lists as comma-joined, so every field is present and splits the same way.
+    """
+    return ' | '.join([key] + [f'{name}={_record_value(value)}'
+                               for name, value in fields])

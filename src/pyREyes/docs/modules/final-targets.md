@@ -1,6 +1,6 @@
 # REyes Final Targets Processor (FTP)
 
-**Part of pyREyes v3.6.0** - Final target combination and spatial filtering tool
+**Part of pyREyes v3.6.1** - Final target combination and spatial filtering tool
 
 Combines multiple navigation files into a final target list while ensuring proper spatial distribution with minimum separation distances.
 

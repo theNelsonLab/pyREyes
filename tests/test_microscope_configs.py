@@ -4,7 +4,7 @@ Loading microscope_configs.json into MicroscopeConfig objects.
 
 import json
 import logging
-from dataclasses import fields
+from dataclasses import MISSING, fields
 
 import pytest
 
@@ -13,6 +13,14 @@ from pyREyes.lib.REyes_microscope_configurations import (
     MicroscopeConfig,
     load_microscope_configs,
 )
+
+
+def required_field_names():
+    """Fields with no default. The optional ones (autoprocess_config,
+    camera_length_calibrated) mean "no value for this instrument" when
+    absent, so a configuration need not carry them."""
+    return {f.name for f in fields(MicroscopeConfig)
+            if f.default is MISSING and f.default_factory is MISSING}
 
 
 def base_params():
@@ -58,11 +66,47 @@ def test_missing_field_raises(tmp_path):
         load_microscope_configs(path)
 
 
-def test_every_field_is_present_in_the_packaged_configs():
-    names = {f.name for f in fields(MicroscopeConfig)}
+def test_every_required_field_is_present_in_the_packaged_configs():
+    names = required_field_names()
     with open(CONFIG_FILE) as handle:
         for params in json.load(handle).values():
             assert names <= params.keys()
+
+
+def test_an_optional_field_may_be_absent(tmp_path):
+    params = base_params()
+    params.pop('autoprocess_config', None)
+    params.pop('camera_length_calibrated', None)
+    path = write_configs(tmp_path, {'A': params})
+
+    configs = load_microscope_configs(path)
+
+    assert configs['A'].autoprocess_config is None
+    assert configs['A'].camera_length_calibrated is None
+
+
+def test_an_optional_field_is_read_when_present(tmp_path):
+    params = dict(base_params(), autoprocess_config='Other-Name',
+                  camera_length_calibrated=1280.0)
+    path = write_configs(tmp_path, {'A': params})
+
+    configs = load_microscope_configs(path)
+
+    assert configs['A'].autoprocess_config == 'Other-Name'
+    assert configs['A'].camera_length_calibrated == 1280.0
+    assert configs['A'].camera_length == params['camera_length']
+
+
+def test_the_packaged_configs_set_the_optional_fields_only_where_known():
+    """Only the Arctica DE Apollo configuration names a pyautoprocess
+    configuration (Talos-Apollo-SM, the same camera geometry); no packaged
+    configuration carries a calibrated camera length yet."""
+    configs = load_microscope_configs()
+    assert configs['Arctica-Apollo-SM'].autoprocess_config == 'Talos-Apollo-SM'
+    for name, config in configs.items():
+        if name != 'Arctica-Apollo-SM':
+            assert config.autoprocess_config is None, name
+        assert config.camera_length_calibrated is None, name
 
 
 def test_missing_file_raises(tmp_path):

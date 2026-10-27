@@ -1,6 +1,6 @@
 # REyes Selected Targets Adder (STA)
 
-**Part of pyREyes v3.6.0** - Custom target addition tool
+**Part of pyREyes v3.6.1** - Custom target addition tool
 
 Appends additional targets (e.g., from nXDS) to existing navigation files with quality-based ranking and diffraction pattern visualization.
 

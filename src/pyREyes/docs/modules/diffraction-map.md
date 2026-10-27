@@ -1,6 +1,6 @@
 # REyes Diffraction Map Processor (DMP)
 
-**Part of pyREyes v3.6.0** - Diffraction pattern quality analysis tool
+**Part of pyREyes v3.6.1** - Diffraction pattern quality analysis tool
 
 Processes blocks of diffraction images, classifies quality based on spots and Fourier Transform patterns, and generates analysis outputs and visualizations.
 
