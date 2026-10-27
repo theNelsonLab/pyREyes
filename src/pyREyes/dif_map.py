@@ -13,7 +13,7 @@ import sys
 import uuid
 import json
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -33,12 +33,13 @@ from skimage.measure import label, regionprops_table
 from pyREyes.lib.ui.REyes_ui import print_banner
 from pyREyes.lib.REyes_logging import setup_logging, log_print
 from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs, MicroscopeConfig
+from pyREyes.lib.REyes_rules import add_good_rule_argument, good_rule_source, resolve_good_rule
 # The MRC mode 0 signedness rule (see lib/mrc_io.py); IMOD_STAMP,
 # IMOD_FLAG_SIGNED_BYTES and mrc_mode0_signed stay importable here.
 from pyREyes.lib.mrc_io import (IMOD_FLAG_SIGNED_BYTES, IMOD_STAMP,  # noqa: F401
                                 mode0_signed as mrc_mode0_signed, mode0_view)
 
-__version__ = '3.6.1'
+__version__ = '3.6.2'
 __min_required_version__ = '3.4.0'
 
 # Configuration Constants
@@ -952,6 +953,9 @@ class FileHandler:
             'format' expands min_id..max_id into file names for blocks recorded on a
             single date. 'files' lists every file of the block in acquisition order
             and is also correct for blocks recorded across midnight.
+            'classification' records the rules the block was classified with:
+            'good_rule' (the minimum DQI for "Good diffraction", after any
+            override) and 'grid_rule' (the "Grid" intensity divisor).
         """
         try:
             json_data = {
@@ -960,7 +964,11 @@ class FileHandler:
                 'max_id': indices.max_index,
                 'format': f'{indices.date_code}_%0{indices.index_width}d{indices.file_suffix}',
                 'uid': self._generate_block_uid(),
-                'files': indices.files
+                'files': indices.files,
+                'classification': {
+                    'good_rule': self.config.good_rule,
+                    'grid_rule': self.config.grid_rule,
+                },
             }
 
             json_path = Path(folder_path) / 'reyes.json'
@@ -1385,6 +1393,9 @@ def create_parser() -> argparse.ArgumentParser:
         help='Name of the CSV file for quality-based targets'
     )
 
+    # Classification rules: --good-rule, REYES_GOOD_RULE, else the configuration
+    add_good_rule_argument(parser)
+
     return parser
 
 
@@ -1408,8 +1419,14 @@ def main() -> int:
         if args.legacy_parse:
             log_print("Using legacy frame loading (REyes 3.4.0 and earlier)")
 
-        # Initialize configuration and processors
-        config = MICROSCOPE_CONFIGS[args.microscope]
+        # Initialize configuration and processors. The good rule in force
+        # (command line > REYES_GOOD_RULE > configuration) goes into a copy of
+        # the configuration, so the shared table is left as loaded.
+        base_config = MICROSCOPE_CONFIGS[args.microscope]
+        good_rule = resolve_good_rule(args.good_rule, base_config.good_rule)
+        config = replace(base_config, good_rule=good_rule)
+        log_print(f"good rule: {good_rule:g} "
+                  f"({good_rule_source(args.good_rule, default_label='microscope configuration')})")
         image_processor = ImageProcessor(config, legacy_parse=args.legacy_parse)
         diffraction_analyzer = DiffractionAnalyzer(config, image_processor)
         data_visualizer = DataVisualizer('dif_maps/diff_blocks_maps')

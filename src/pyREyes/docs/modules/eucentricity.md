@@ -1,6 +1,6 @@
 # REyes Navigator Eucentricity Corrector (NEC)
 
-**Part of pyREyes v3.6.1** - Eucentricity tilt correction tool
+**Part of pyREyes v3.6.2** - Eucentricity tilt correction tool
 
 Automatically corrects eucentric height by fitting a plane to stage positions and adjusting Z coordinates in navigation files.
 

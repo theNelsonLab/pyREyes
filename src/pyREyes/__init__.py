@@ -1,3 +1,3 @@
 """Automated MicroED data collection and processing."""
 
-__version__ = "3.6.1"
+__version__ = "3.6.2"

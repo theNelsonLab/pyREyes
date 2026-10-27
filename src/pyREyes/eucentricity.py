@@ -23,7 +23,7 @@ from pyREyes.lib.ui.REyes_ui import print_banner
 from pyREyes.lib.REyes_logging import setup_logging, log_print
 from pyREyes.lib.REyes_errors import ProcessingError
 
-__version__ = '3.6.1'
+__version__ = '3.6.2'
 __min_required_version__ = '3.4.0'
 
 # A fitted plane is recorded as `trusted` in eucentricity_plane.json only when

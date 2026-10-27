@@ -20,7 +20,7 @@ from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs
 from pyREyes.lib.diffraction import beam_center_search
 from pyREyes.lib.diffraction.DiffractionDataProcessor import DiffractionDataProcessor
 
-__version__ = '3.6.1'
+__version__ = '3.6.2'
 __min_required_version__ = '3.4.0'
 
 MICROSCOPE_CONFIGS = load_microscope_configs()

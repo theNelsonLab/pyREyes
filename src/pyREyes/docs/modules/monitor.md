@@ -1,6 +1,6 @@
 # REyes Processing Monitor
 
-**Part of pyREyes v3.6.1** - Automated workflow orchestration and monitoring tool
+**Part of pyREyes v3.6.2** - Automated workflow orchestration and monitoring tool
 
 Provides automated execution and monitoring of the complete diffraction data processing pipeline using a state machine to track progress and automatically trigger each processing step.
 
@@ -60,6 +60,7 @@ reyes-monitor --autoprocess --microscope-config Arctica-CETA-mrc-SM
 | `--filtering` | string | `default` | Grid square filtering strategy |
 | `--manual-squares` | flag | `False` | Enable manual grid square selection |
 | `--camera-length` | float | config | Override camera length in mm |
+| `--good-rule` | float | config | Minimum DQI (lattice-quality peaks per diffraction peak) for "Good diffraction" in `dif-map-2`; exported as `REYES_GOOD_RULE` for every process the monitor starts and passed to `dif-map-2` explicitly (since 3.6.2) |
 | `--top-target-per-category` | int | `2` | Top targets per category (used by `create-final-targets-4`) |
 | `--top-target-per-block` | int | none | Top targets per block; enables block-based selection in `create-final-targets-4` |
 | `--target-lists` | list | `sum peaks dqi` | Target lists for block-based selection: `sum` (intensity), `peaks` (diffraction peaks), `dqi` (quality); 1-3 values. Applies only with `--top-target-per-block`; category-based selection always uses the nxds, quality, spots and sum navigation files |
@@ -72,6 +73,8 @@ reyes-monitor --autoprocess --microscope-config Arctica-CETA-mrc-SM
 | `--idle-timeout` | float | `0` (off) | Seconds with nothing new from the microscope, while waiting on SerialEM, before the monitor stops and records the session as `interrupted`; `0` waits indefinitely |
 | `--autosolve-timeout` | float | none | Seconds before AutoSolve is killed (no limit by default) |
 | `--autoprocess` | flag | `False` | Enable automatic movie processing (requires `--microscope-config`) |
+
+The good rule in force is resolved the same way in every command: an explicit `--good-rule` wins over the `REYES_GOOD_RULE` environment variable, which wins over the microscope configuration's `good_rule`; without the option the monitor exports nothing, so a value already in its environment reaches the stages unchanged.
 
 #### AutoProcess arguments (passed to `autoprocess`)
 

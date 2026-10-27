@@ -28,6 +28,7 @@ from pyREyes.lib.REyes_autoproc import (
     produced_output, run_for_movie)
 from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs
 from pyREyes.lib import REyes_serialem as serialem
+from pyREyes.lib.REyes_rules import GOOD_RULE_ENV, add_good_rule_argument, export_good_rule
 
 MICROSCOPE_CONFIGS = load_microscope_configs()
 
@@ -161,7 +162,7 @@ class CustomHelpFormatter(argparse.HelpFormatter):
             return text.splitlines()
         return super()._split_lines(text, width)
 
-__version__ = '3.6.1'
+__version__ = '3.6.2'
 __min_required_version__ = '3.4.0'
 
 # The movie log, and the logs SerialEM writes when the movie stage is re-entered
@@ -216,6 +217,7 @@ class REyesProcessor:
              autosolve_timeout=None,
              poll_interval=DEFAULT_POLL_INTERVAL,
              idle_timeout=DEFAULT_IDLE_TIMEOUT,
+             good_rule=None,
              # Autoprocess parameters
              autoprocess=False,
              microscope_config=None,
@@ -335,6 +337,16 @@ class REyesProcessor:
 
         self.stepscan_only = stepscan_only
         self.montage_only = montage_only
+
+        # The minimum DQI for "Good diffraction" when it overrides the
+        # microscope configuration's (None = no override). Exported as
+        # REYES_GOOD_RULE for every process this monitor starts, and passed to
+        # dif-map-2 explicitly as well.
+        self.good_rule = good_rule
+        export_good_rule(good_rule)
+        if good_rule is not None:
+            self.logger.info(f"good rule: {good_rule:g} (exported as {GOOD_RULE_ENV} "
+                             f"for the stages)")
 
         self.autoprocess = autoprocess
         # Save autoprocess arguments individually
@@ -1173,12 +1185,15 @@ class REyesProcessor:
                     folder_name = self._block_folder(log_file)
                     progressed = True
 
-                    success = self.run_module('dif_map', {
+                    dif_map_args = {
                         'microscope': self.microscope,
                         'folder': folder_name,
                         'skip_processed': True,
                         'proc_blocks': 1
-                    })
+                    }
+                    if self.good_rule is not None:
+                        dif_map_args['good_rule'] = self.good_rule
+                    success = self.run_module('dif_map', dif_map_args)
 
                     if success:
                         self.processed_blocks.append(self.current_block)
@@ -1741,6 +1756,8 @@ def main():
                             type=float,
                             default=None,
                             help='Optional override for camera length in mm (default: based on microscope config)')
+
+    add_good_rule_argument(reyes_group)
     
     reyes_group.add_argument('--top-target-per-category',
                             type=int,
@@ -1964,6 +1981,7 @@ def main():
         movie_timeout=args.movie_timeout,
         autosolve_timeout=args.autosolve_timeout,
         idle_timeout=args.idle_timeout,
+        good_rule=args.good_rule,
     )
 
     # Only include AutoProcess args if the flag is set

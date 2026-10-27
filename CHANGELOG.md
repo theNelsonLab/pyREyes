@@ -2,6 +2,32 @@
 
 All notable user-facing changes to pyREyes are listed here.
 
+## 3.6.2
+
+One option: the DQI threshold for "Good diffraction" can be set from the
+command line. Without it every stage behaves exactly as in 3.6.1; the only
+difference in the outputs is one new key in each block's `reyes.json`.
+
+### Good rule (`dif-map-2`, `reyes-monitor`)
+- `--good-rule DQI` sets the minimum DQI (lattice-quality peaks per
+  diffraction peak) for a frame to be classified as "Good diffraction",
+  overriding the `good_rule` of the microscope configuration. The value in
+  force is resolved the same way everywhere: the command-line option, else the
+  `REYES_GOOD_RULE` environment variable, else the microscope configuration.
+  `dif-map-2` logs the value and where it came from
+  (`good rule: 2 (command line)`).
+- `reyes-monitor --good-rule` exports `REYES_GOOD_RULE` for every process it
+  starts and also passes `--good-rule` to `dif-map-2` explicitly. Without the
+  option nothing is exported or passed, so a value already in the monitor's
+  environment reaches the stages unchanged.
+- Each block's `reyes.json` carries a `classification` object with the
+  `good_rule` and `grid_rule` the block was classified with. Every existing
+  key is kept.
+- `pyREyes.lib.REyes_rules` (`resolve_good_rule`, `good_rule_source`,
+  `add_good_rule_argument`, `export_good_rule`, `GOOD_RULE_ENV`) is the
+  helper behind both commands, for other programs built on this package
+  that want the same option with the same precedence.
+
 ## 3.6.1
 
 A maintenance release: the monitor can be extended by subclassing, and a few

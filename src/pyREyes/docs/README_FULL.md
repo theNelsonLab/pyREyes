@@ -1,7 +1,7 @@
 # REyes (Reciprocal Eyes)
 ## End-to-End Autonomous Electron Diffraction
 
-**pyREyes v3.6.1** - Automated MicroED diffraction data collection and analysis package
+**pyREyes v3.6.2** - Automated MicroED diffraction data collection and analysis package
 
 This repository contains a series of scripts designed to process diffraction data, generate heatmaps, identify key targets, and manage navigation files for SerialEM. The scripts are structured to be executed in the order outlined below, ensuring that new blocks of data are processed systematically while maintaining data integrity.
 
@@ -173,7 +173,7 @@ This script processes blocks of diffraction images, classifies their quality bas
   - Fourier Transform peaks maps
   - Quality classification maps with color coding
 - **Block Data**:
-  - `reyes.json`: Block metadata, written only for completely processed blocks (index range, name pattern and a `files` list of every file in acquisition order)
+  - `reyes.json`: Block metadata, written only for completely processed blocks (index range, name pattern, a `files` list of every file in acquisition order, and the `classification` rules the block was classified with: `good_rule`, `grid_rule`)
 - **Log File**: Detailed processing log in `REyes_logs/dmp_processing.log`
 
 #### Key Processing Steps:
@@ -196,6 +196,7 @@ Options:
 - `--proc-blocks N`: Limit processing to N blocks
 - `--folder`: Process specific folder only
 - `--legacy-parse`: Load frames exactly as REyes 3.4.0 and earlier did, to reproduce old results
+- `--good-rule DQI`: Minimum DQI (lattice-quality peaks per diffraction peak) for "Good diffraction"; this option, else the `REYES_GOOD_RULE` environment variable, else the microscope configuration's `good_rule`
 
 Example:
 ```bash
@@ -203,8 +204,8 @@ dif-map-2 --microscope Arctica-CETA --targets-per-block 6 --skip-processed
 ```
 
 #### Quality Classification Criteria:
-- **Good diffraction**: ≥10 spots with strong pattern correlation
-- **Bad diffraction**: ≥10 spots with weak pattern correlation
+- **Good diffraction**: ≥10 spots and DQI (lattice-quality peaks ÷ diffraction peaks) at or above the good rule (`good_rule` of the microscope configuration, or `--good-rule`)
+- **Bad diffraction**: ≥10 spots and DQI below the good rule
 - **Poor diffraction**: 3-9 spots
 - **No diffraction**: <3 spots
 - **Grid**: Intensity below threshold (calculated as mean intensity ÷ grid_rule)
@@ -465,6 +466,7 @@ Options:
 - `--starting-state`: Begin monitoring from a specific state
 - `--current-block`: Set current diffraction map block number (default: 1)
 - `--camera-length`: Override camera length in mm (default: from microscope configuration)
+- `--good-rule`: Minimum DQI for "Good diffraction" in `dif-map-2`, exported as `REYES_GOOD_RULE` for every process the monitor starts (default: from microscope configuration; an explicit option wins over the environment variable, which wins over the configuration)
 - `--top-target-per-category`: Top targets per category, used by `create-final-targets-4` (default: 2)
 - `--top-target-per-block`: Top targets per block; enables block-based selection in `create-final-targets-4`
 - `--target-lists`: Target lists for block-based selection: `sum` (intensity), `peaks` (diffraction peaks), `dqi` (quality); 1-3 values. Applies only with `--top-target-per-block`; category-based selection always uses the nxds, quality, spots and sum navigation files (default: all three)

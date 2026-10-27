@@ -21,7 +21,7 @@ from typing import Iterator, Optional
 
 import numpy as np
 
-__version__ = '3.6.1'
+__version__ = '3.6.2'
 
 # IMOD header stamp and its "bytes are signed" flag (words 39 and 40, 1-based).
 IMOD_STAMP = 1146047817

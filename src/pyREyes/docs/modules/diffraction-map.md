@@ -1,6 +1,6 @@
 # REyes Diffraction Map Processor (DMP)
 
-**Part of pyREyes v3.6.1** - Diffraction pattern quality analysis tool
+**Part of pyREyes v3.6.2** - Diffraction pattern quality analysis tool
 
 Processes blocks of diffraction images, classifies quality based on spots and Fourier Transform patterns, and generates analysis outputs and visualizations.
 
@@ -56,6 +56,9 @@ dif-map-2 --microscope Arctica-CETA --targets-per-block 6 --skip-processed
 | `--targets-spots-csv` | `targets_spots.csv` | Name of the CSV file for spot-based targets |
 | `--targets-quality-csv` | `targets_quality.csv` | Name of the CSV file for quality-based targets |
 | `--legacy-parse` | `False` | Load frames exactly as REyes 3.4.0 and earlier did, to reproduce old results |
+| `--good-rule DQI` | config | Minimum DQI (lattice-quality peaks per diffraction peak) for a frame to count as "Good diffraction". Precedence: this option, then the `REYES_GOOD_RULE` environment variable, then the microscope configuration's `good_rule` (since 3.6.2) |
+
+The value in force and its source are logged once per run, e.g. `good rule: 2 (command line)`.
 
 ---
 
@@ -78,6 +81,7 @@ dif-map-2 --microscope Arctica-CETA --targets-per-block 6 --skip-processed
   - `version`, `uid`
   - `min_id`, `max_id`, `format` - index range and a zero-padded name pattern (e.g. `20251107_%05d_integrated_movie.mrc`) for blocks recorded on a single date
   - `files` - every file of the block in acquisition order; also correct for blocks recorded across midnight
+  - `classification` - the rules the block was classified with: `good_rule` (the minimum DQI for "Good diffraction", after any `--good-rule` or `REYES_GOOD_RULE` override) and `grid_rule` (since 3.6.2)
 - **`REyes_logs/dmp_processing.log`** - Processing details
 
 ---
@@ -101,8 +105,8 @@ dif-map-2 --microscope Arctica-CETA --targets-per-block 6 --skip-processed
 - Each frame's stage position is read from the SerialEM log, `serialEM_log` lines after the line naming the frame (see `microscope_configs.json`). If the `Stage` line is not at that offset, the following lines are searched up to the next frame, so extra log lines between a frame and its `Stage` line no longer leave the frame without coordinates (since 3.6.0)
 
 ### Quality Classification
-- **Good diffraction**: ≥10 spots with strong pattern correlation
-- **Bad diffraction**: ≥10 spots with weak pattern correlation  
+- **Good diffraction**: ≥10 spots and DQI (lattice-quality peaks ÷ diffraction peaks) at or above the good rule (`good_rule` of the microscope configuration, or `--good-rule` / `REYES_GOOD_RULE`)
+- **Bad diffraction**: ≥10 spots and DQI below the good rule
 - **Poor diffraction**: 3-9 spots
 - **No diffraction**: <3 spots
 - **Grid**: Intensity below threshold

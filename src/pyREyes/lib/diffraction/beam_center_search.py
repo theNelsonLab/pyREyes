@@ -53,7 +53,7 @@ import numpy as np
 
 from pyREyes.lib.REyes_logging import log_print
 
-__version__ = '3.6.1'
+__version__ = '3.6.2'
 
 # How the centre of a snapshot is chosen.
 MODE_AUTO = 'auto'      # search the frames; fall back to the frame centre, visibly

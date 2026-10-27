@@ -1,6 +1,6 @@
 # REyes Navigation File Generator (NFG)
 
-**Part of pyREyes v3.6.1** - Navigation file generator for diffraction targets
+**Part of pyREyes v3.6.2** - Navigation file generator for diffraction targets
 
 Processes diffraction target data and generates SerialEM-compatible navigation files with quality metrics and diffraction pattern visualizations.
 

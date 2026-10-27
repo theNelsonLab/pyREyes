@@ -21,7 +21,7 @@ from pyREyes.lib.REyes_logging import setup_logging, log_print
 from pyREyes.lib.diffraction import beam_center_search
 from pyREyes.lib.REyes_microscope_configurations import load_microscope_configs, MicroscopeConfig
 
-__version__ = '3.6.1'
+__version__ = '3.6.2'
 __min_required_version__ = '3.4.0'
 
 MICROSCOPE_CONFIGS = load_microscope_configs()
