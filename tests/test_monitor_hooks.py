@@ -3,8 +3,8 @@
 REyesProcessor is extended by subclassing. These tests pin the hooks a subclass
 may rely on -- the stage table, the exit code of a stage, the status document,
 the abort and idle state sets, the state after eucentricity, the per-movie
-callback and the idle backstop's `busy_elsewhere` -- and that the classic
-monitor behaves exactly as before when none of them is overridden.
+callback and the idle backstop's `busy_elsewhere` -- and that the monitor
+behaves exactly as before when none of them is overridden.
 """
 
 import json
@@ -47,7 +47,7 @@ class WithExtraStage(REyesProcessor):
         return commands
 
 
-def test_the_stage_table_lists_the_classic_stages(tmp_path, monkeypatch):
+def test_the_stage_table_lists_the_shipped_stages(tmp_path, monkeypatch):
     p = processor(tmp_path, monkeypatch)
     assert p.module_commands() == {
         'grid_squares': ['grid-squares-0'],
@@ -120,7 +120,7 @@ def test_options_are_rendered_before_the_positionals(tmp_path, monkeypatch):
     assert seen['cwd'] == p.working_directory
 
 
-def test_the_classic_run_module_contract_is_unchanged(tmp_path, monkeypatch):
+def test_the_run_module_contract_is_unchanged(tmp_path, monkeypatch):
     p = processor(tmp_path, monkeypatch)
     codes = iter([0, 3])
     monkeypatch.setattr(reyes, 'run_with_timeout',

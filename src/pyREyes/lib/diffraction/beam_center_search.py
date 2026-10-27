@@ -30,9 +30,9 @@ audited.
 Before falling back to the frame centre, a caller may offer a SESSION centre
 (`sibling_centre`, via `find_beam_centres(fallback=session_fallback(...))`):
 the trusted, detected centre of a sibling session in the same parent
-directory, on frames of the SAME SHAPE. The beam does not move between the
-grids of one session, and a grid with only one or two patterns has too few
-frames to outvote a bad answer on its own. A borrowed centre is labelled as
+directory, on frames of the SAME SHAPE: a session with only one or two
+patterns has too few frames to outvote a bad answer on its own, and the beam
+does not move between sessions collected together. A borrowed centre is labelled as
 such on the picture, in the log and in the sidecar (`source = "session"`,
 `borrowed_from`). A centre is never rescaled from one frame size to another.
 
@@ -64,8 +64,8 @@ SOURCE_GIVEN = 'given'
 SOURCE_FRAME = 'frame'
 SOURCE_SESSION = 'session'   # borrowed from a sibling session (same parent directory)
 
-# Where a session's sidecars live, relative to its directory. Searched, in this
-# order, for a sibling's trusted centre (`sibling_centre`, `session_fallback`).
+# Where a session's sidecars live, relative to its directory. Searched for a
+# sibling's trusted centre (`sibling_centre`, `session_fallback`).
 SIDECAR_LOCATIONS = (
     'targets/beam_center.json',
 )

@@ -222,9 +222,11 @@ def write_plane_json(result: RegressionResult, output_dir: str) -> str:
 
     os.makedirs(output_dir, exist_ok=True)
     path = os.path.join(output_dir, 'eucentricity_plane.json')
-    with open(path, 'w') as handle:
-        json.dump(plane, handle, indent=2, allow_nan=False)
-        handle.write('\n')
+    text = json.dumps(plane, indent=2, allow_nan=False) + '\n'   # fails before any write
+    tmp = path + '.tmp'
+    with open(tmp, 'w') as handle:
+        handle.write(text)
+    os.replace(tmp, path)
 
     log_print(f"\nEucentric plane written to {path}")
     if not result.trusted:

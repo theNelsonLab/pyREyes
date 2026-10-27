@@ -197,11 +197,11 @@ While waiting on SerialEM, the monitor reads the SerialEM logs for an abort of t
 
 - `state_handlers()` returns the state-to-handler mapping; a subclass adds its own states and handlers to it. A handler returns `STOP`, `SKIP_DELAY` or `None`.
 - `module_commands()` returns the stages the monitor can run (stage name to argv prefix, a new dict each call); `run_module_code(name, args, positional)` runs one and returns its exit status (1 when it could not run at all); `run_module(name, args)` is `run_module_code(...) == 0`.
-- `after_eucentricity_state()` is the state entered once `eucentricity-1` has run (`WAITING_FOR_DIFFRACTION_MAP` in the classic workflow).
+- `after_eucentricity_state()` is the state entered once `eucentricity-1` has run (`WAITING_FOR_DIFFRACTION_MAP` unless overridden).
 - `after_movie(movie_dir, ok)` is called once a movie's autoprocess run has finished (after its `autoprocess_done.flag` is written); the base class does nothing, and an exception raised here is logged without changing the movie's result.
 - `status_payload(state, detail, reason)` builds the `session_status.json` document; override it to add keys.
 - `abort_states` and `idle_states` (instance attributes, sets of states) are the waits in which a SerialEM abort stops the monitor at once and in which `--idle-timeout` runs; `MONITOR_OWNED` (class attribute, tuple) lists the session-root entries the monitor writes itself, which never reset the idle clock. `targets_dir` and `status_path` are where `set_aside_items.json` and `session_status.json` are written.
-- `busy_elsewhere`: a handler sets it to True in a tick that has work in flight outside the process (for example a batch job it submitted), so the idle backstop does not end the session; it is reset at the start of every tick.
+- `busy_elsewhere`: a handler sets it to True in a tick that has work in flight outside the process, so the idle backstop does not end the session; it is reset at the start of every tick.
 
 These features work with both SerialEM script packages in `docs/scripts/`. The set-aside records (`BLOCK_SKIPPED`, `ITEM_SKIPPED`, `VALVE_CLOSED`, `STPSCN_RESULT`) are written by the DE Apollo and Ceta packages shipped with 3.6.0; with earlier packages the log-order rules above still apply.
 

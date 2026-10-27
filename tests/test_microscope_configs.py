@@ -100,7 +100,7 @@ def test_an_optional_field_is_read_when_present(tmp_path):
 def test_the_packaged_configs_set_the_optional_fields_only_where_known():
     """Only the Arctica DE Apollo configuration names a pyautoprocess
     configuration (Talos-Apollo-SM, the same camera geometry); no packaged
-    configuration carries a calibrated camera length yet."""
+    configuration carries a calibrated camera length."""
     configs = load_microscope_configs()
     assert configs['Arctica-Apollo-SM'].autoprocess_config == 'Talos-Apollo-SM'
     for name, config in configs.items():

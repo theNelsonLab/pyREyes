@@ -20,11 +20,9 @@ behaviour of every stage are unchanged; `dif-map-2` results are identical to
   (the state entered once eucentricity has run), `after_movie()` (called once a
   movie's autoprocess run has finished) and `busy_elsewhere` (a tick with work
   in flight outside the process does not count as idle). See "Extending the
-  monitor" in `docs/modules/monitor.md`. The classic monitor's behaviour,
-  state sequence, log phrases and `session_status.json` keys are unchanged.
-- A stage's exit status is logged as before; the monitor's log line after
-  eucentricity now names the state it enters (`Moving to
-  WAITING_FOR_DIFFRACTION_MAP`).
+  monitor" in `docs/modules/monitor.md`. With nothing overridden the
+  monitor's behaviour, state sequence, log phrases and `session_status.json`
+  keys are unchanged.
 
 ### Eucentricity (`eucentricity-1`)
 - The fitted plane is written to `grid_squares/eucentricity_plane.json`:
@@ -44,7 +42,7 @@ behaviour of every stage are unchanged; `dif-map-2` results are identical to
   centre is marked on the snapshot and recorded in `beam_center.json` with
   `source: "session"` and `borrowed_from`; a sidecar that borrowed nothing is
   written exactly as in 3.6.0. The shipped stages do not use the fallback
-  yet, so their pictures are unchanged.
+, so their pictures are unchanged.
 
 ### Library
 - `pyREyes.lib.mrc_io.read(path)` and `frames(path, mmap=False)` read an MRC
@@ -61,7 +59,7 @@ behaviour of every stage are unchanged; `dif-map-2` results are identical to
   default that is missing is still an error. Of the shipped configurations
   only `Arctica-Apollo-SM` sets `autoprocess_config` (`Talos-Apollo-SM`, the
   pyautoprocess name for that camera geometry); nothing in this release reads
-  the fields yet.
+  the fields.
 
 ## 3.6.0
 

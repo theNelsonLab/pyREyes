@@ -296,9 +296,9 @@ class REyesProcessor:
         # defaults; a subclass with more waiting states adds them here.
         self.abort_states = frozenset(ABORT_STATES)
         self.idle_states = frozenset(IDLE_STATES)
-        # Set by a tick that has work in flight outside this process (for
-        # example a batch job it submitted), so the idle backstop does not end
-        # the session. Reset to False at the top of every monitor tick.
+        # Set by a tick that has work in flight outside this process, so the
+        # idle backstop does not end the session. Reset to False at the top of
+        # every monitor tick.
         self.busy_elsewhere = False
         self._status_written = False
         self.stop_reason = None          # set by the SIGTERM handler
@@ -1056,7 +1056,10 @@ class REyesProcessor:
                 self.processed_logs.add(log_file)
                 if self.run_module('eucentricity', {}):
                     self.state = self.after_eucentricity_state()
-                    self.logger.info(f"Moving to {self.state.name}")
+                    if self.state is ProcessingState.WAITING_FOR_DIFFRACTION_MAP:
+                        self.logger.info("Moving to diffraction map monitoring state")
+                    else:
+                        self.logger.info(f"Moving to {self.state.name}")
         return None
 
     def after_eucentricity_state(self):
